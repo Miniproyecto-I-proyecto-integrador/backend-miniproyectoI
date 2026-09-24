@@ -135,5 +135,12 @@ MAILERS = {
     },
 }
 
-CORS_ALLOW_ALL_ORIGINS = True
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5173",  # React / Vite
+    "http://localhost:3000",
+    "https://tu-url-de-vercel.vercel.app",
+]
