@@ -135,10 +135,16 @@ MAILERS = {
     },
 }
 
-CORS_ALLOW_ALL_ORIGINS = False
+# permite todos los orígenes para CORS,por ahora, se puede endurecer en producción
+CORS_ALLOW_ALL_ORIGINS = True
 
+
+# Por si decid mantener CORS_ALLOW_ALL_ORIGINS = False:
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
-    if origin.strip()
+    for origin in os.getenv(
+        'CORS_ALLOWED_ORIGINS',
+        'https://frontend-miniproyecto-i-git-develop-mini-fa73.vercel.app,http://localhost:5173,http://localhost:3000'
+    ).split(',')
+    if origin.strip()  
 ]
