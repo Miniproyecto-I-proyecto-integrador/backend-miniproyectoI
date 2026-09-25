@@ -137,12 +137,8 @@ MAILERS = {
 
 CORS_ALLOW_ALL_ORIGINS = False
 
-default_cors_origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv('CORS_ALLOWED_ORIGINS', ','.join(default_cors_origins)).split(',')
+    for origin in os.getenv('CORS_ALLOWED_ORIGINS', '').split(',')
     if origin.strip()
 ]
