@@ -56,6 +56,19 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
 class ActivitySerializer(serializers.ModelSerializer):
     subtasks = SubtaskSerializer(many=True, read_only=True)
+    progress = serializers.SerializerMethodField()
+    completed_subtasks = serializers.SerializerMethodField()
+    total_subtasks = serializers.SerializerMethodField()
+
+    def get_total_subtasks(self, obj):
+        return obj.subtasks.count()
+
+    def get_completed_subtasks(self, obj):
+        return obj.subtasks.filter(status='done').count()
+
+    def get_progress(self, obj):
+        total = self.get_total_subtasks(obj)
+        return round(self.get_completed_subtasks(obj) / total * 100) if total else 0
 
     class Meta:
         model = Activity

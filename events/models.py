@@ -14,6 +14,10 @@ class Activity(models.Model):
     user_id = models.UUIDField()  # referencia al usuario (auth.users de Supabase)
     name = models.CharField(max_length=200)
     date_event = models.DateField()
+    event_type = models.CharField(max_length=100, blank=True, default='')
+    location = models.CharField(max_length=200, blank=True, default='')
+    client = models.CharField(max_length=200, blank=True, default='')
+    description = models.TextField(blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='active')
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -24,12 +28,15 @@ class Activity(models.Model):
 class Subtask(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pendiente'),
+        ('in_progress', 'En curso'),
         ('done', 'Hecho'),
         ('postponed', 'Pospuesto'),
     ]
     id = models.AutoField(primary_key=True)
     activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name='subtasks')
     name = models.CharField(max_length=200)
+    category = models.CharField(max_length=100, blank=True, default='')
+    contact = models.CharField(max_length=200, blank=True, default='')
     description = models.TextField(blank=True, null=True)
     due_date = models.DateField()
     scheduled_date = models.DateField()  # día al que está asignada (para detectar sobrecarga)
