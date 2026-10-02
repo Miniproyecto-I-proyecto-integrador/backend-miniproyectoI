@@ -15,6 +15,12 @@ class SubtaskSerializer(serializers.ModelSerializer):
         estimated_hours = data.get('estimated_hours', self.instance.estimated_hours if self.instance else None)
 
         if activity:
+            request = self.context.get('request')
+            if request and str(activity.user_id) != str(request.user.pk):
+                raise serializers.ValidationError({
+                    'activity': 'Solo puedes asociar gestiones a tus propios eventos.'
+                })
+
             # 1. Validación de fechas frente a la fecha del evento
             if scheduled_date and scheduled_date > activity.date_event:
                 raise serializers.ValidationError({
@@ -54,6 +60,48 @@ class SubtaskSerializer(serializers.ModelSerializer):
         return data
 
 
+class TodaySubtaskSerializer(serializers.ModelSerializer):
+    event_id = serializers.IntegerField(source='activity_id', read_only=True)
+    event_name = serializers.CharField(source='activity.name', read_only=True)
+
+    class Meta:
+        model = Subtask
+        fields = (
+            'id',
+            'activity',
+            'event_id',
+            'event_name',
+            'name',
+            'category',
+            'contact',
+            'description',
+            'due_date',
+            'scheduled_date',
+            'estimated_hours',
+            'status',
+            'note',
+            'created_at',
+        )
+
+
+class TodayGroupsSerializer(serializers.Serializer):
+    vencidas = TodaySubtaskSerializer(many=True)
+    para_hoy = TodaySubtaskSerializer(many=True)
+    proximas = TodaySubtaskSerializer(many=True)
+
+
+class TodayFiltersSerializer(serializers.Serializer):
+    curso = serializers.CharField(allow_null=True)
+    estado = serializers.CharField(allow_null=True)
+
+
+class TodayActivitiesResponseSerializer(serializers.Serializer):
+    fecha = serializers.DateField()
+    filtros = TodayFiltersSerializer()
+    grupos = TodayGroupsSerializer()
+    total = serializers.IntegerField()
+
+
 class ActivitySerializer(serializers.ModelSerializer):
     subtasks = SubtaskSerializer(many=True, read_only=True)
     progress = serializers.SerializerMethodField()
@@ -73,9 +121,11 @@ class ActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Activity
         fields = '__all__'
+        read_only_fields = ('user_id',)
 
 
 class DailyCapacitySerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyCapacity
         fields = '__all__'
+        read_only_fields = ('user_id',)

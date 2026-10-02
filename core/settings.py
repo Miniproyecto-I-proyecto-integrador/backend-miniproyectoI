@@ -148,3 +148,29 @@ CORS_ALLOWED_ORIGINS = [
     ).split(',')
     if origin.strip()  
 ]
+
+SUPABASE_URL = os.getenv('SUPABASE_URL', '').rstrip('/')
+SUPABASE_JWT_SECRET = os.getenv('SUPABASE_JWT_SECRET', '')
+SUPABASE_JWT_AUDIENCE = os.getenv('SUPABASE_JWT_AUDIENCE', 'authenticated')
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'events.authentication.SupabaseJWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+SWAGGER_SETTINGS = {
+    'SECURITY_REQUIREMENTS': [{'Bearer': []}],
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT de Supabase con el formato: Bearer <token>',
+        },
+    },
+    'USE_SESSION_AUTH': False,
+}

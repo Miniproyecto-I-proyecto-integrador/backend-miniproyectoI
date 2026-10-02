@@ -24,7 +24,10 @@ schema_view = get_schema_view(
     openapi.Info(
         title="API Eventos",
         default_version='v1',
-        description="API del gestor de eventos - logística previa",
+        description=(
+            "API del gestor de eventos. Usa Authorization: Bearer <token> de Supabase. "
+            "Swagger permite probar endpoints autenticados."
+        ),
     ),
     public=True,
     permission_classes=[permissions.AllowAny],
