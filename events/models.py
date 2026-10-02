@@ -1,9 +1,5 @@
+from django.conf import settings
 from django.db import models
-import uuid
-
-# Create your models here.
-from django.db import models
-import uuid
 
 class Activity(models.Model):
     STATUS_CHOICES = [
@@ -11,7 +7,7 @@ class Activity(models.Model):
         ('completed', 'Finalizado'),
     ]
     id = models.AutoField(primary_key=True)
-    user_id = models.UUIDField()  # referencia al usuario (auth.users de Supabase)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='activities')
     name = models.CharField(max_length=200)
     date_event = models.DateField()
     event_type = models.CharField(max_length=100, blank=True, default='')
@@ -33,6 +29,7 @@ class Subtask(models.Model):
         ('postponed', 'Pospuesto'),
     ]
     id = models.AutoField(primary_key=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='subtasks')
     activity = models.ForeignKey(Activity, on_delete=models.CASCADE, related_name='subtasks')
     name = models.CharField(max_length=200)
     category = models.CharField(max_length=100, blank=True, default='')
@@ -51,12 +48,12 @@ class Subtask(models.Model):
 
 class DailyCapacity(models.Model):
     id = models.AutoField(primary_key=True)
-    user_id = models.UUIDField()
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='daily_capacities')
     date = models.DateField()
     total_hours_assigned = models.DecimalField(max_digits=5, decimal_places=1, default=0)
 
     class Meta:
-        unique_together = ('user_id', 'date')
+        unique_together = ('user', 'date')
 
     def __str__(self):
         return f"{self.user_id} - {self.date}: {self.total_hours_assigned}h"

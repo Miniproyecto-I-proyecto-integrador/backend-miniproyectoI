@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'drf_yasg',
     'events',
+    'authentication',
 ]
 
 MIDDLEWARE = [
@@ -148,3 +149,25 @@ CORS_ALLOWED_ORIGINS = [
     ).split(',')
     if origin.strip()  
 ]
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+}
+
+SWAGGER_SETTINGS = {
+    'SECURITY_REQUIREMENTS': [{'Bearer': []}],
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header',
+            'description': 'JWT con el formato: Bearer <token>',
+        },
+    },
+    'USE_SESSION_AUTH': False,
+}
