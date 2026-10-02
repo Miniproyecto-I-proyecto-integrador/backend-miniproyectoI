@@ -26,7 +26,7 @@ class RegisterView(generics.CreateAPIView):
 class LoginView(APIView):
     permission_classes = (AllowAny,)
 
-    @swagger_auto_schema(security=[])
+    @swagger_auto_schema(request_body=LoginSerializer, security=[])
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -42,7 +42,7 @@ class LoginView(APIView):
 class RefreshView(APIView):
     permission_classes = (AllowAny,)
 
-    @swagger_auto_schema(security=[])
+    @swagger_auto_schema(request_body=RefreshSerializer, security=[])
     def post(self, request):
         serializer = RefreshSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
