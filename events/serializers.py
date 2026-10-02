@@ -7,6 +7,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subtask
         fields = '__all__'
+        read_only_fields = ('user',)
 
     def validate(self, data):
         activity = data.get('activity', self.instance.activity if self.instance else None)
@@ -15,6 +16,12 @@ class SubtaskSerializer(serializers.ModelSerializer):
         estimated_hours = data.get('estimated_hours', self.instance.estimated_hours if self.instance else None)
 
         if activity:
+            request = self.context.get('request')
+            if not request or activity.user_id != request.user.pk:
+                raise serializers.ValidationError({
+                    'activity': 'Solo puedes asociar subtareas a tus propios eventos.'
+                })
+
             # 1. Validación de fechas frente a la fecha del evento
             if scheduled_date and scheduled_date > activity.date_event:
                 raise serializers.ValidationError({
@@ -35,6 +42,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
             # 3. Lógica de sobrecarga diaria (Límite 6h)
             if scheduled_date and estimated_hours:
                 existing_subtasks = Subtask.objects.filter(
+                    user_id=activity.user_id,
                     activity__user_id=activity.user_id,
                     scheduled_date=scheduled_date
                 )
@@ -55,16 +63,26 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
 
 class ActivitySerializer(serializers.ModelSerializer):
-    subtasks = SubtaskSerializer(many=True, read_only=True)
+    subtasks = serializers.SerializerMethodField()
     progress = serializers.SerializerMethodField()
     completed_subtasks = serializers.SerializerMethodField()
     total_subtasks = serializers.SerializerMethodField()
 
+    def get_subtasks(self, obj):
+        subtasks = getattr(obj, '_owned_subtasks', None)
+        if subtasks is None:
+            subtasks = obj.subtasks.filter(user=obj.user)
+        return SubtaskSerializer(subtasks, many=True, context=self.context).data
+
+    def _get_subtasks(self, obj):
+        subtasks = getattr(obj, '_owned_subtasks', None)
+        return subtasks if subtasks is not None else obj.subtasks.filter(user=obj.user)
+
     def get_total_subtasks(self, obj):
-        return obj.subtasks.count()
+        return len(self._get_subtasks(obj))
 
     def get_completed_subtasks(self, obj):
-        return obj.subtasks.filter(status='done').count()
+        return sum(subtask.status == 'done' for subtask in self._get_subtasks(obj))
 
     def get_progress(self, obj):
         total = self.get_total_subtasks(obj)
@@ -73,9 +91,11 @@ class ActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Activity
         fields = '__all__'
+        read_only_fields = ('user',)
 
 
 class DailyCapacitySerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyCapacity
         fields = '__all__'
+        read_only_fields = ('user',)
