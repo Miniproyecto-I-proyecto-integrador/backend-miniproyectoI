@@ -13,6 +13,7 @@ import os
 import dj_database_url
 from dotenv import load_dotenv
 
+
 load_dotenv()
 
 from pathlib import Path
@@ -29,6 +30,17 @@ SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'False') == 'True'
+
+'''
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv(
+        'ALLOWED_HOSTS',
+        'localhost,127.0.0.1,testserver,backend-miniproyectoi.onrender.com',
+    ).split(',')
+    if host.strip()
+]
+'''
 
 ALLOWED_HOSTS = ['*']
 
@@ -111,7 +123,7 @@ AUTH_PASSWORD_VALIDATORS = [
 # Internationalization
 # https://docs.djangoproject.com/en/6.1/topics/i18n/
 
-LANGUAGE_CODE = 'en-us'
+LANGUAGE_CODE = 'es-co'
 
 TIME_ZONE = 'UTC'
 
@@ -136,11 +148,8 @@ MAILERS = {
     },
 }
 
-# permite todos los orígenes para CORS,por ahora, se puede endurecer en producción
 CORS_ALLOW_ALL_ORIGINS = True
 
-
-# Por si decid mantener CORS_ALLOW_ALL_ORIGINS = False:
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
@@ -151,6 +160,9 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '5/minute',
+    },
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),

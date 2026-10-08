@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
@@ -44,7 +45,19 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data['password'] = make_password(validated_data['password'])
-        return User.objects.create(**validated_data)
+        try:
+            with transaction.atomic():
+                return User.objects.create(**validated_data)
+        except IntegrityError:
+            if User.objects.filter(email__iexact=validated_data['email']).exists():
+                raise serializers.ValidationError({
+                    'email': 'Este correo ya está registrado.'
+                })
+            if User.objects.filter(username__iexact=validated_data['username']).exists():
+                raise serializers.ValidationError({
+                    'username': 'Este nombre de usuario ya está registrado.'
+                })
+            raise
 
 
 class LoginSerializer(serializers.Serializer):
