@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from rest_framework import serializers
 from .models import (
     Activity, Subtask, DailyCapacity,
@@ -137,3 +139,21 @@ class DailyCapacitySerializer(serializers.ModelSerializer):
         model = DailyCapacity
         fields = '__all__'
         read_only_fields = ('user',)
+
+
+class ResolutionMoveSerializer(serializers.Serializer):
+    """HU-08: valida la nueva fecha para mover una gestión."""
+    due_date = serializers.DateField(required=True)
+
+
+class ResolutionReduceHoursSerializer(serializers.Serializer):
+    """HU-08: valida una nueva estimación positiva de horas.
+
+    El modelo usa una precisión de una décima, por lo que 0.1 es el menor
+    valor positivo representable. No existe otro rango mínimo en la HU.
+    """
+    estimated_hours = serializers.DecimalField(
+        max_digits=4,
+        decimal_places=1,
+        min_value=Decimal('0.1'),
+    )

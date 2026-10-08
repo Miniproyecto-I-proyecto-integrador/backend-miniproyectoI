@@ -5,6 +5,7 @@ from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db import transaction
 from rest_framework.views import APIView
 from .models import (
     Activity, Subtask, DailyCapacity, OrganizerSettings,
@@ -12,10 +13,12 @@ from .models import (
 )
 from .serializers import (
     ActivitySerializer, SubtaskSerializer, DailyCapacitySerializer, DailyLimitSerializer,
+    ResolutionMoveSerializer, ResolutionReduceHoursSerializer,
 )
 from .services import (
     RESOLUTION_OPTIONS, OverloadConflict, find_overloaded_days,
-    get_daily_limit, get_day_load, set_daily_limit,
+    get_daily_limit, get_day_load, set_daily_limit, check_day_capacity,
+    suggest_available_day,
 )
 
 #Se usará em ModelViewSet para poder validar que se entrega todo, sin embargo en los siguientes sprints se endurecerá esta medida
@@ -65,6 +68,111 @@ class SubtaskViewSet(viewsets.ModelViewSet):
         if isinstance(exc, OverloadConflict):
             return Response(exc.response_data(), status=status.HTTP_400_BAD_REQUEST)
         return super().handle_exception(exc)
+
+    @action(detail=True, methods=['get'], url_path='sugerir-dia')
+    def sugerir_dia(self, request, pk=None):
+        """HU-08: devuelve el primer día posterior con capacidad disponible."""
+        subtask = self.get_object()
+        if subtask.status not in ('pending', 'in_progress'):
+            return Response(
+                {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        suggestion = suggest_available_day(request.user, subtask)
+        if suggestion is None:
+            return Response({
+                'suggestion': None,
+                'message': 'No hay un día disponible antes de la fecha del evento.',
+            })
+
+        return Response({
+            'suggestion': suggestion,
+            'conflict_options': list(RESOLUTION_OPTIONS),
+        })
+
+    @action(detail=True, methods=['patch'], url_path='resolver-mover')
+    def resolver_mover(self, request, pk=None):
+        """HU-08: mueve una gestión si el nuevo día tiene capacidad."""
+        subtask = self.get_object()
+        if subtask.status not in ('pending', 'in_progress'):
+            return Response(
+                {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        input_serializer = ResolutionMoveSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        new_date = input_serializer.validated_data['due_date']
+
+        if new_date == subtask.due_date:
+            return Response(
+                {'due_date': ['La nueva fecha debe ser diferente a la fecha actual.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            serializer = SubtaskSerializer(
+                subtask,
+                data={'due_date': new_date},
+                partial=True,
+                context={'request': request},
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        return Response({
+            'resolution': 'move',
+            'conflict_resolved': True,
+            'subtask': SubtaskSerializer(subtask, context={'request': request}).data,
+        })
+
+    @action(detail=True, methods=['patch'], url_path='resolver-reducir')
+    def resolver_reducir(self, request, pk=None):
+        """HU-08: reduce horas y devuelve el conflicto actualizado si persiste."""
+        subtask = self.get_object()
+        if subtask.status not in ('pending', 'in_progress'):
+            return Response(
+                {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        input_serializer = ResolutionReduceHoursSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        new_hours = input_serializer.validated_data['estimated_hours']
+
+        if new_hours >= subtask.estimated_hours:
+            return Response(
+                {'estimated_hours': ['Las horas nuevas deben ser menores que las horas actuales.']},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            serializer = SubtaskSerializer(
+                subtask,
+                data={'estimated_hours': new_hours},
+                partial=True,
+                context={'request': request},
+            )
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+
+        info = check_day_capacity(
+            request.user,
+            subtask.due_date,
+            subtask.estimated_hours,
+            exclude_id=subtask.id,
+        )
+
+        response = {
+            'resolution': 'reduce_hours',
+            'conflict_resolved': not info['exceeds'],
+            'conflict_persists': info['exceeds'],
+            'subtask': SubtaskSerializer(subtask, context={'request': request}).data,
+        }
+        if info['exceeds']:
+            response['conflict'] = {**info, 'options': list(RESOLUTION_OPTIONS)}
+        return Response(response)
 
 
 class DailyCapacityViewSet(viewsets.ModelViewSet):
