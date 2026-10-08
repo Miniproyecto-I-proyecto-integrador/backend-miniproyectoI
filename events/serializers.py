@@ -1,6 +1,10 @@
 from rest_framework import serializers
 from django.db.models import Sum
-from .models import Activity, Subtask, DailyCapacity
+from .models import (
+    Activity, Subtask, DailyCapacity,
+    MIN_DAILY_HOURS_LIMIT, MAX_DAILY_HOURS_LIMIT,
+)
+from .services import get_daily_limit
 
 
 class SubtaskSerializer(serializers.ModelSerializer):
@@ -52,7 +56,8 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
                 current_hours = existing_subtasks.aggregate(Sum('estimated_hours'))['estimated_hours__sum'] or 0
                 total_hours = float(current_hours) + float(estimated_hours)
-                limit = 6.0 
+                # HU-12: límite configurable por organizador (6 h por defecto).
+                limit = float(get_daily_limit(activity.user))
 
                 if total_hours > limit:
                     raise serializers.ValidationError({
@@ -92,6 +97,28 @@ class ActivitySerializer(serializers.ModelSerializer):
         model = Activity
         fields = '__all__'
         read_only_fields = ('user',)
+
+
+_DAILY_LIMIT_RANGE_MESSAGE = (
+    f'El límite diario debe ser un número entero de horas entre '
+    f'{MIN_DAILY_HOURS_LIMIT} y {MAX_DAILY_HOURS_LIMIT}.'
+)
+
+## Serializer para validar el límite diario de horas de gestión por organizador (HU-12)
+class DailyLimitSerializer(serializers.Serializer):
+    """HU-12: valida el límite diario de horas (entero, 1 a 16 incluidos)."""
+    daily_hours_limit = serializers.IntegerField(
+        min_value=MIN_DAILY_HOURS_LIMIT,
+        max_value=MAX_DAILY_HOURS_LIMIT,
+        error_messages={
+            'required': _DAILY_LIMIT_RANGE_MESSAGE,
+            'null': _DAILY_LIMIT_RANGE_MESSAGE,
+            'invalid': _DAILY_LIMIT_RANGE_MESSAGE,
+            'min_value': _DAILY_LIMIT_RANGE_MESSAGE,
+            'max_value': _DAILY_LIMIT_RANGE_MESSAGE,
+            'max_string_length': _DAILY_LIMIT_RANGE_MESSAGE,
+        },
+    )
 
 
 class DailyCapacitySerializer(serializers.ModelSerializer):

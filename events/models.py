@@ -1,5 +1,12 @@
 from django.conf import settings
 from django.db import models
+from django.db.models import Q
+
+# HU-12: límite diario de horas de gestión por organizador.
+DEFAULT_DAILY_HOURS_LIMIT = 6
+MIN_DAILY_HOURS_LIMIT = 1
+MAX_DAILY_HOURS_LIMIT = 16
+
 
 class Activity(models.Model):
     STATUS_CHOICES = [
@@ -57,3 +64,30 @@ class DailyCapacity(models.Model):
 
     def __str__(self):
         return f"{self.user_id} - {self.date}: {self.total_hours_assigned}h"
+
+##modelo para guardar la configuración de cada organizador (límite diario de horas de gestión)
+class OrganizerSettings(models.Model):
+    """Configuración propia de cada organizador (una fila por usuario).
+
+    Si el usuario nunca configuró nada no existe fila y se usa el valor por
+    defecto (ver events.services.get_daily_limit).
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='organizer_settings',
+    )
+    daily_hours_limit = models.PositiveSmallIntegerField(default=DEFAULT_DAILY_HOURS_LIMIT)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(daily_hours_limit__gte=MIN_DAILY_HOURS_LIMIT)
+                & Q(daily_hours_limit__lte=MAX_DAILY_HOURS_LIMIT),
+                name='daily_hours_limit_between_1_and_16',
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}: {self.daily_hours_limit}h/día"

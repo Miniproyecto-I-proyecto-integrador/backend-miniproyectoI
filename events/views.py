@@ -1,9 +1,17 @@
 from django.db.models import Prefetch, Sum
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from .models import Activity, Subtask, DailyCapacity
-from .serializers import ActivitySerializer, SubtaskSerializer, DailyCapacitySerializer
+from rest_framework.views import APIView
+from .models import (
+    Activity, Subtask, DailyCapacity, OrganizerSettings,
+    DEFAULT_DAILY_HOURS_LIMIT, MIN_DAILY_HOURS_LIMIT, MAX_DAILY_HOURS_LIMIT,
+)
+from .serializers import (
+    ActivitySerializer, SubtaskSerializer, DailyCapacitySerializer, DailyLimitSerializer,
+)
+from .services import get_daily_limit, set_daily_limit
 
 #Se usará em ModelViewSet para poder validar que se entrega todo, sin embargo en los siguientes sprints se endurecerá esta medida
 #Es sólo para el MVP
@@ -66,10 +74,52 @@ class DailyCapacityViewSet(viewsets.ModelViewSet):
         assigned = Subtask.objects.filter(**filters).exclude(status='done').aggregate(
             total=Sum('estimated_hours')
         )['total'] or 0
+        limit = get_daily_limit(request.user)
         return Response({
             'date': date,
             'assigned_hours': float(assigned),
-            'limit_hours': 6,
-            'overloaded': float(assigned) > 6,
+            'limit_hours': limit,
+            'overloaded': float(assigned) > limit,
         })
+
+### Vista para el límite diario de horas de gestión del organizador autenticado (HU-12)
+class DailyLimitView(APIView):
+    """HU-12: límite diario de horas de gestión del organizador autenticado.
+
+    GET devuelve el límite actual (6 h por defecto si nunca lo configuró).
+    PUT/PATCH lo actualiza; solo afecta al usuario del token.
+    """
+
+    def _payload(self, user):
+        saved = OrganizerSettings.objects.filter(user=user).first()
+        return {
+            'daily_hours_limit': saved.daily_hours_limit if saved else DEFAULT_DAILY_HOURS_LIMIT,
+            'is_default': saved is None,
+            'min_hours': MIN_DAILY_HOURS_LIMIT,
+            'max_hours': MAX_DAILY_HOURS_LIMIT,
+        }
+
+    @swagger_auto_schema(operation_summary='Ver límite diario de horas de gestión')
+    def get(self, request):
+        return Response(self._payload(request.user))
+
+    def _update(self, request):
+        serializer = DailyLimitSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        set_daily_limit(request.user, serializer.validated_data['daily_hours_limit'])
+        return Response(self._payload(request.user))
+
+    @swagger_auto_schema(
+        request_body=DailyLimitSerializer,
+        operation_summary='Actualizar límite diario de horas de gestión (1 a 16)',
+    )
+    def put(self, request):
+        return self._update(request)
+
+    @swagger_auto_schema(
+        request_body=DailyLimitSerializer,
+        operation_summary='Actualizar límite diario de horas de gestión (1 a 16)',
+    )
+    def patch(self, request):
+        return self._update(request)
 
