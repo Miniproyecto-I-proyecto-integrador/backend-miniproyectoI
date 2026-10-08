@@ -168,8 +168,9 @@ class EventOwnershipTests(APITestCase):
 			estimated_hours=Decimal('5.0'),
 		)
 
+		# El resumen calcula la carga por due_date (fecha límite).
 		response = self.client.get(reverse('daily-capacity-resumen'), {
-			'date': '2026-10-03',
+			'date': '2026-10-04',
 			'user_id': self.other_owner.id,
 		})
 

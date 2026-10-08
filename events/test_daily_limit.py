@@ -167,7 +167,7 @@ class DailyLimitAffectsConflictDetectionTests(APITestCase):
             estimated_hours=Decimal('5.0'),
         )
 
-        response = self.client.get(reverse('daily-capacity-resumen'), {'date': '2026-10-10'})
+        response = self.client.get(reverse('daily-capacity-resumen'), {'date': '2026-10-20'})
 
         self.assertEqual(response.data['limit_hours'], 4)
         self.assertTrue(response.data['overloaded'])

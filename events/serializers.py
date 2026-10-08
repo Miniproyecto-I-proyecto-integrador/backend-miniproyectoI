@@ -1,10 +1,9 @@
 from rest_framework import serializers
-from django.db.models import Sum
 from .models import (
     Activity, Subtask, DailyCapacity,
     MIN_DAILY_HOURS_LIMIT, MAX_DAILY_HOURS_LIMIT,
 )
-from .services import get_daily_limit
+from .services import ACTIVE_STATUSES, OverloadConflict, check_day_capacity
 
 
 class SubtaskSerializer(serializers.ModelSerializer):
@@ -18,6 +17,7 @@ class SubtaskSerializer(serializers.ModelSerializer):
         scheduled_date = data.get('scheduled_date', self.instance.scheduled_date if self.instance else None)
         due_date = data.get('due_date', self.instance.due_date if self.instance else None)
         estimated_hours = data.get('estimated_hours', self.instance.estimated_hours if self.instance else None)
+        status = data.get('status', self.instance.status if self.instance else 'pending')
 
         if activity:
             request = self.context.get('request')
@@ -43,28 +43,39 @@ class SubtaskSerializer(serializers.ModelSerializer):
                     "estimated_hours": "Las horas estimadas deben ser mayores a 0."
                 })
 
-            # 3. Lógica de sobrecarga diaria (Límite 6h)
-            if scheduled_date and estimated_hours:
-                existing_subtasks = Subtask.objects.filter(
-                    user_id=activity.user_id,
-                    activity__user_id=activity.user_id,
-                    scheduled_date=scheduled_date
-                )
-                
-                if self.instance:
-                    existing_subtasks = existing_subtasks.exclude(id=self.instance.id)
-
-                current_hours = existing_subtasks.aggregate(Sum('estimated_hours'))['estimated_hours__sum'] or 0
-                total_hours = float(current_hours) + float(estimated_hours)
-                # HU-12: límite configurable por organizador (6 h por defecto).
-                limit = float(get_daily_limit(activity.user))
-
-                if total_hours > limit:
-                    raise serializers.ValidationError({
-                        "conflicto": f"Quedarías con {total_hours}h de gestión planificadas para el {scheduled_date} (límite {limit}h)."
-                    })
+            # 3. Sobrecarga diaria (HU-07): límite del organizador, día = due_date
+            self._check_daily_overload(activity.user, due_date, estimated_hours, status)
 
         return data
+
+    def _check_daily_overload(self, user, due_date, estimated_hours, status):
+        """Bloquea el guardado si el cambio deja el día por encima del límite.
+
+        Solo se evalúa cuando el cambio AGREGA carga al día. Editar otros campos,
+        reducir horas, marcar como hecha o posponer no suman carga, así que un
+        día ya sobrecargado (p. ej. tras bajar el límite) se puede seguir
+        resolviendo sin quedar bloqueado.
+        """
+        if not due_date or not estimated_hours or status not in ACTIVE_STATUSES:
+            return
+
+        previous = self.instance
+        if (
+            previous is not None
+            and previous.status in ACTIVE_STATUSES
+            and previous.due_date == due_date
+            and estimated_hours <= previous.estimated_hours
+        ):
+            return
+
+        info = check_day_capacity(
+            user,
+            due_date,
+            estimated_hours,
+            exclude_id=previous.id if previous else None,
+        )
+        if info['exceeds']:
+            raise OverloadConflict(info)
 
 
 class ActivitySerializer(serializers.ModelSerializer):
@@ -104,7 +115,7 @@ _DAILY_LIMIT_RANGE_MESSAGE = (
     f'{MIN_DAILY_HOURS_LIMIT} y {MAX_DAILY_HOURS_LIMIT}.'
 )
 
-## Serializer para validar el límite diario de horas de gestión por organizador (HU-12)
+
 class DailyLimitSerializer(serializers.Serializer):
     """HU-12: valida el límite diario de horas (entero, 1 a 16 incluidos)."""
     daily_hours_limit = serializers.IntegerField(
