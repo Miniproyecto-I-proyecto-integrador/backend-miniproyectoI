@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
@@ -42,6 +43,17 @@ class AuthenticationTests(APITestCase):
         self.assertIn('email', duplicate_email.data)
         self.assertEqual(duplicate_username.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('username', duplicate_username.data)
+
+    def test_database_rejects_email_duplicates_ignoring_case(self):
+        self.register()
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                User.objects.create_user(
+                    username='organizer_b',
+                    email='A@EXAMPLE.COM',
+                    password=self.password,
+                )
 
     def test_register_requires_email_and_names(self):
         response = self.register(email='', first_name='')

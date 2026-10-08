@@ -1,8 +1,9 @@
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -74,11 +75,16 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(Activity.objects.get(pk=response.data['id']).user, self.owner)
 
 	def test_subtask_create_assigns_owner_and_rejects_foreign_activity(self):
+		today = timezone.localdate()
+		due_date = today + timedelta(days=1)
+		self.own_activity.date_event = today + timedelta(days=2)
+		self.own_activity.save(update_fields=['date_event'])
+
 		own_response = self.client.post(reverse('subtask-list'), {
 			'activity': self.own_activity.id,
 			'name': 'Confirmar catering',
-			'due_date': '2026-10-04',
-			'scheduled_date': '2026-10-03',
+			'due_date': due_date.isoformat(),
+			'scheduled_date': today.isoformat(),
 			'estimated_hours': '2.0',
 			'user': self.other_owner.id,
 		}, format='json')
@@ -94,6 +100,76 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(own_response.data['user'], self.owner.id)
 		self.assertEqual(foreign_response.status_code, status.HTTP_400_BAD_REQUEST)
 		self.assertEqual(Subtask.objects.count(), 1)
+
+	def test_subtask_create_does_not_trust_client_today_for_past_due_date(self):
+		today = timezone.localdate()
+		self.own_activity.date_event = today + timedelta(days=2)
+		self.own_activity.save(update_fields=['date_event'])
+		payload = {
+			'activity': self.own_activity.id,
+			'name': 'Gestión vencida',
+			'due_date': (today - timedelta(days=1)).isoformat(),
+			'scheduled_date': today.isoformat(),
+			'estimated_hours': '1.0',
+		}
+		future_client_date = today + timedelta(days=30)
+
+		response = self.client.post(
+			reverse('subtask-list') + f'?today={future_client_date.isoformat()}',
+			payload,
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('due_date', response.data)
+		self.assertEqual(Subtask.objects.count(), 0)
+
+	def test_activity_date_cannot_precede_existing_subtask_dates(self):
+		today = timezone.localdate()
+		self.own_activity.date_event = today + timedelta(days=10)
+		self.own_activity.save(update_fields=['date_event'])
+		subtask_due_date = today + timedelta(days=5)
+		Subtask.objects.create(
+			user=self.owner,
+			activity=self.own_activity,
+			name='Gestión vinculada',
+			due_date=subtask_due_date,
+			scheduled_date=today + timedelta(days=4),
+			estimated_hours=Decimal('1.0'),
+		)
+
+		response = self.client.patch(
+			reverse('activity-detail', args=[self.own_activity.id]),
+			{'date_event': (today + timedelta(days=3)).isoformat()},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('date_event', response.data)
+		self.own_activity.refresh_from_db()
+		self.assertEqual(self.own_activity.date_event, today + timedelta(days=10))
+
+	def test_activity_date_cannot_precede_scheduled_subtask_date(self):
+		today = timezone.localdate()
+		self.own_activity.date_event = today + timedelta(days=10)
+		self.own_activity.save(update_fields=['date_event'])
+		Subtask.objects.create(
+			user=self.owner,
+			activity=self.own_activity,
+			name='Gestión programada',
+			due_date=today + timedelta(days=2),
+			scheduled_date=today + timedelta(days=5),
+			estimated_hours=Decimal('1.0'),
+		)
+
+		response = self.client.patch(
+			reverse('activity-detail', args=[self.own_activity.id]),
+			{'date_event': (today + timedelta(days=4)).isoformat()},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertIn('date_event', response.data)
 
 	def test_foreign_subtasks_do_not_leak_in_activity_details(self):
 		Subtask.objects.create(
@@ -131,16 +207,28 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
 		self.assertTrue(Subtask.objects.filter(pk=foreign_subtask.id).exists())
 
-	def test_daily_capacity_creation_and_list_are_owner_scoped(self):
-		response = self.client.post(reverse('daily-capacity-list'), {
-			'date': '2026-10-03',
-			'total_hours_assigned': '3.0',
-			'user': self.other_owner.id,
-		}, format='json')
+	def test_daily_capacity_is_read_only_and_list_is_owner_scoped(self):
+		today = timezone.localdate()
+		own_capacity = DailyCapacity.objects.create(
+			user=self.owner,
+			date=today,
+			total_hours_assigned=Decimal('3.0'),
+		)
+		DailyCapacity.objects.create(
+			user=self.other_owner,
+			date=today,
+			total_hours_assigned=Decimal('4.0'),
+		)
 
-		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-		self.assertEqual(response.data['user'], self.owner.id)
-		self.assertEqual(list(DailyCapacity.objects.values_list('user_id', flat=True)), [self.owner.id])
+		create_response = self.client.post(reverse('daily-capacity-list'), {
+			'date': today.isoformat(),
+			'total_hours_assigned': '5.0',
+		}, format='json')
+		list_response = self.client.get(reverse('daily-capacity-list'))
+
+		self.assertEqual(create_response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+		self.assertEqual(list_response.status_code, status.HTTP_200_OK)
+		self.assertEqual([item['id'] for item in list_response.data], [own_capacity.id])
 
 	def test_capacity_summary_ignores_client_supplied_user_id(self):
 		Subtask.objects.create(

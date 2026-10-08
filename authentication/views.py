@@ -2,6 +2,7 @@ from rest_framework import generics, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .throttles import LoginRateThrottle
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_yasg.utils import swagger_auto_schema
 
@@ -25,6 +26,7 @@ class RegisterView(generics.CreateAPIView):
 
 class LoginView(APIView):
     permission_classes = (AllowAny,)
+    throttle_classes = (LoginRateThrottle,)
 
     @swagger_auto_schema(request_body=LoginSerializer, security=[])
     def post(self, request):

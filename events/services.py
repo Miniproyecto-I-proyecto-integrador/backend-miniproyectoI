@@ -173,25 +173,69 @@ def find_overloaded_days(user, limit=None, from_date=None):
 # Resolución de conflictos (HU-08)
 # --------------------------------------------------------------------------
 def suggest_available_day(user, subtask, start_date=None, end_date=None):
-    """Devuelve el primer día posterior con capacidad para una subtarea.
+    """Devuelve el primer día disponible para reprogramar una subtarea.
 
-    La búsqueda se limita a la fecha del evento porque ``due_date`` no puede
-    ser posterior a ``activity.date_event``. La propia subtarea se excluye
-    del cálculo para no contar dos veces sus horas mientras se mueve.
+    La búsqueda se realiza en dos etapas:
+
+    1. Desde el día posterior a ``start_date`` (hoy del cliente) hasta la
+       fecha límite original de la subtarea.
+    2. Si no existe capacidad en ese rango, desde el día posterior a la
+       fecha límite original hasta la fecha del evento.
+
+    De esta forma se prioriza adelantar la gestión cuando existe capacidad,
+    pero también se permite aplazarla hasta la fecha del evento.
+
+    ``start_date`` permite usar la fecha local enviada por el cliente. Si no
+    se envía, se usa la fecha local del servidor como respaldo.
     """
     if subtask.user_id != user.pk or subtask.activity.user_id != user.pk:
         return None
 
-    today = timezone.localdate()
-    start_date = start_date or max(subtask.due_date + timedelta(days=1), today)
-    end_date = end_date or subtask.activity.date_event
+    today = start_date or timezone.localdate()
+    event_date = end_date or subtask.activity.date_event
+    original_due_date = subtask.due_date
 
-    if start_date > end_date:
+    if today >= event_date:
         return None
 
     limit = get_daily_limit(user)
-    day = start_date
-    while day <= end_date:
+
+    # ------------------------------------------------------------------
+    # Primera etapa:
+    # desde mañana hasta la fecha límite original de la subtarea.
+    # ------------------------------------------------------------------
+    first_start = today + timedelta(days=1)
+    first_end = min(original_due_date, event_date)
+
+    day = first_start
+
+    while day <= first_end:
+        info = check_day_capacity(
+            user,
+            day,
+            subtask.estimated_hours,
+            exclude_id=subtask.id,
+            limit=limit,
+        )
+
+        if not info['exceeds']:
+            return info
+
+        day += timedelta(days=1)
+
+    # ------------------------------------------------------------------
+    # Segunda etapa:
+    # si no hay espacio antes/hasta el due_date original,
+    # continuar después del due_date hasta la fecha del evento.
+    # ------------------------------------------------------------------
+    second_start = max(
+        original_due_date + timedelta(days=1),
+        first_start,
+    )
+
+    day = second_start
+
+    while day <= event_date:
         info = check_day_capacity(
             user,
             day,
@@ -201,6 +245,7 @@ def suggest_available_day(user, subtask, start_date=None, end_date=None):
         )
         if not info['exceeds']:
             return info
+
         day += timedelta(days=1)
 
     return None

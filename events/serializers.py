@@ -1,5 +1,6 @@
 from decimal import Decimal
-
+from django.utils import timezone
+from django.db.models import Max
 from rest_framework import serializers
 from .models import (
     Activity, Subtask, DailyCapacity,
@@ -35,9 +36,15 @@ class SubtaskSerializer(serializers.ModelSerializer):
                 })
                 
             if due_date and due_date > activity.date_event:
-                raise serializers.ValidationError({
-                    "due_date": "La fecha límite no puede ser posterior a la fecha del evento."
-                })
+                           raise serializers.ValidationError({
+                               "due_date": "La fecha límite no puede ser posterior a la fecha del evento."
+                        })
+           
+            if due_date:
+                if due_date < timezone.localdate():
+                    raise serializers.ValidationError({
+                        "due_date": "La fecha límite no puede ser anterior a hoy."
+                    })
 
             # 2. Horas estimadas positivas
             if estimated_hours is not None and estimated_hours <= 0:
@@ -85,6 +92,28 @@ class ActivitySerializer(serializers.ModelSerializer):
     progress = serializers.SerializerMethodField()
     completed_subtasks = serializers.SerializerMethodField()
     total_subtasks = serializers.SerializerMethodField()
+
+    def validate(self, data):
+        if self.instance is not None and 'date_event' in data:
+            latest_dates = self.instance.subtasks.aggregate(
+                latest_due_date=Max('due_date'),
+                latest_scheduled_date=Max('scheduled_date'),
+            )
+            latest_subtask_date = max(
+                (
+                    day for day in latest_dates.values()
+                    if day is not None
+                ),
+                default=None,
+            )
+            if latest_subtask_date and data['date_event'] < latest_subtask_date:
+                raise serializers.ValidationError({
+                    'date_event': (
+                        'La fecha del evento no puede ser anterior a la fecha '
+                        'límite o programada de una de sus gestiones.'
+                    )
+                })
+        return data
 
     def get_subtasks(self, obj):
         subtasks = getattr(obj, '_owned_subtasks', None)

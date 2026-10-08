@@ -259,6 +259,19 @@ class DailySummaryTests(ConflictTestBase):
         self.assertEqual(response.data['date'], self.today.isoformat())
         self.assertEqual(response.data['assigned_hours'], 2.0)
 
+    def test_summary_uses_client_today_when_server_date_differs(self):
+        client_today = self.today + timedelta(days=1)
+        self.make(client_today, 2)
+
+        response = self.client.get(
+            reverse('daily-capacity-resumen'),
+            {'today': client_today.isoformat()},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['date'], client_today.isoformat())
+        self.assertEqual(response.data['assigned_hours'], 2.0)
+
     def test_summary_rejects_invalid_dates_without_server_error(self):
         for bad in ('abc', '2026-13-45', '31/10/2026'):
             response = self.client.get(reverse('daily-capacity-resumen'), {'date': bad})
@@ -332,6 +345,18 @@ class LowerLimitWarningTests(ConflictTestBase):
 
         self.assertTrue(response.data['has_conflicts'])
         self.assertEqual(response.data['overloaded_days'][0]['total_hours'], 7.0)
+
+    def test_daily_limit_uses_client_today(self):
+        client_today = self.today + timedelta(days=1)
+        self.make(client_today, 8)
+
+        response = self.client.get(
+            self.url,
+            {'today': client_today.isoformat()},
+        )
+
+        self.assertTrue(response.data['has_conflicts'])
+        self.assertEqual(response.data['overloaded_days'][0]['date'], client_today.isoformat())
 
     def test_invalid_limit_is_not_saved_and_reports_nothing_new(self):
         self.make(self.day_x, 4)
