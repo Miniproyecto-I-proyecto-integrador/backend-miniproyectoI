@@ -3,6 +3,7 @@ from django.contrib.auth.hashers import make_password
 from django.contrib.auth.password_validation import validate_password
 from django.db import IntegrityError, transaction
 from rest_framework import serializers
+from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 User = get_user_model()
@@ -88,7 +89,11 @@ class RefreshSerializer(serializers.Serializer):
             data={'refresh': attrs['refresh_token']},
             context=self.context,
         )
-        token_serializer.is_valid(raise_exception=True)
+        try:
+            token_serializer.is_valid(raise_exception=True)
+        except TokenError as exc:
+            # Token inválido, vencido o en lista negra: 401 en vez de 500.
+            raise InvalidToken(exc.args[0])
         tokens = token_serializer.validated_data
         return {
             'access_token': tokens['access'],

@@ -361,7 +361,7 @@ class HU08ResolutionTests(APITestCase):
             Decimal('2.0'),
         )
 
-    def test_reprogramming_to_client_past_is_rejected(self):
+    def test_reprogramming_to_client_past_is_allowed(self):
         response = self.client.patch(
             reverse(
                 'subtask-detail',
@@ -377,10 +377,7 @@ class HU08ResolutionTests(APITestCase):
 
         self.assertEqual(
             response.status_code,
-            status.HTTP_400_BAD_REQUEST,
-        )
-        self.assertIn(
-            'due_date',
+            status.HTTP_200_OK,
             response.data,
         )
 
@@ -388,5 +385,5 @@ class HU08ResolutionTests(APITestCase):
 
         self.assertEqual(
             self.subtask.due_date,
-            self.target_day,
+            self.today - timedelta(days=1),
         )

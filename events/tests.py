@@ -74,6 +74,17 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(response.data['user'], self.owner.id)
 		self.assertEqual(Activity.objects.get(pk=response.data['id']).user, self.owner)
 
+	def test_activity_create_allows_past_event_date(self):
+		past_date = timezone.localdate() - timedelta(days=1)
+
+		response = self.client.post(reverse('activity-list'), {
+			'name': 'Evento vencido',
+			'date_event': past_date.isoformat(),
+		}, format='json')
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+		self.assertEqual(response.data['date_event'], past_date.isoformat())
+
 	def test_subtask_create_assigns_owner_and_rejects_foreign_activity(self):
 		today = timezone.localdate()
 		due_date = today + timedelta(days=1)
@@ -101,7 +112,7 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(foreign_response.status_code, status.HTTP_400_BAD_REQUEST)
 		self.assertEqual(Subtask.objects.count(), 1)
 
-	def test_subtask_create_does_not_trust_client_today_for_past_due_date(self):
+	def test_subtask_create_allows_past_due_date_regardless_of_client_today(self):
 		today = timezone.localdate()
 		self.own_activity.date_event = today + timedelta(days=2)
 		self.own_activity.save(update_fields=['date_event'])
@@ -120,9 +131,9 @@ class EventOwnershipTests(APITestCase):
 			format='json',
 		)
 
-		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-		self.assertIn('due_date', response.data)
-		self.assertEqual(Subtask.objects.count(), 0)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+		self.assertEqual(response.data['due_date'], payload['due_date'])
+		self.assertEqual(Subtask.objects.count(), 1)
 
 	def test_activity_date_cannot_precede_existing_subtask_dates(self):
 		today = timezone.localdate()
@@ -149,7 +160,7 @@ class EventOwnershipTests(APITestCase):
 		self.own_activity.refresh_from_db()
 		self.assertEqual(self.own_activity.date_event, today + timedelta(days=10))
 
-	def test_activity_date_cannot_precede_scheduled_subtask_date(self):
+	def test_activity_date_can_precede_legacy_scheduled_subtask_date(self):
 		today = timezone.localdate()
 		self.own_activity.date_event = today + timedelta(days=10)
 		self.own_activity.save(update_fields=['date_event'])
@@ -168,8 +179,9 @@ class EventOwnershipTests(APITestCase):
 			format='json',
 		)
 
-		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-		self.assertIn('date_event', response.data)
+		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+		self.own_activity.refresh_from_db()
+		self.assertEqual(self.own_activity.date_event, today + timedelta(days=4))
 
 	def test_foreign_subtasks_do_not_leak_in_activity_details(self):
 		Subtask.objects.create(

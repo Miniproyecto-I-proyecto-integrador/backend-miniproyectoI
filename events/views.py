@@ -30,7 +30,11 @@ def _query_date(request, name, fallback=None):
     raw = request.query_params.get(name)
     if not raw:
         return fallback
-    parsed = parse_date(raw)
+    try:
+        parsed = parse_date(raw)
+    except ValueError:
+        # Formato correcto pero fecha inexistente (p. ej. 2026-02-30).
+        parsed = None
     if parsed is None:
         raise ValueError(name)
     return parsed
