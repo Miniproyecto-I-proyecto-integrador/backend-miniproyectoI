@@ -1,5 +1,4 @@
 from decimal import Decimal
-from django.utils import timezone
 from django.db.models import Max
 from rest_framework import serializers
 from .models import (
@@ -17,7 +16,6 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         activity = data.get('activity', self.instance.activity if self.instance else None)
-        scheduled_date = data.get('scheduled_date', self.instance.scheduled_date if self.instance else None)
         due_date = data.get('due_date', self.instance.due_date if self.instance else None)
         estimated_hours = data.get('estimated_hours', self.instance.estimated_hours if self.instance else None)
         status = data.get('status', self.instance.status if self.instance else 'pending')
@@ -30,21 +28,10 @@ class SubtaskSerializer(serializers.ModelSerializer):
                 })
 
             # 1. Validación de fechas frente a la fecha del evento
-            if scheduled_date and scheduled_date > activity.date_event:
-                raise serializers.ValidationError({
-                    "scheduled_date": "La fecha programada no puede ser posterior a la fecha del evento."
-                })
-                
             if due_date and due_date > activity.date_event:
-                           raise serializers.ValidationError({
-                               "due_date": "La fecha límite no puede ser posterior a la fecha del evento."
-                        })
-           
-            if due_date:
-                if due_date < timezone.localdate():
-                    raise serializers.ValidationError({
-                        "due_date": "La fecha límite no puede ser anterior a hoy."
-                    })
+                raise serializers.ValidationError({
+                    "due_date": "La fecha límite no puede ser posterior a la fecha del evento."
+                })
 
             # 2. Horas estimadas positivas
             if estimated_hours is not None and estimated_hours <= 0:
@@ -97,20 +84,13 @@ class ActivitySerializer(serializers.ModelSerializer):
         if self.instance is not None and 'date_event' in data:
             latest_dates = self.instance.subtasks.aggregate(
                 latest_due_date=Max('due_date'),
-                latest_scheduled_date=Max('scheduled_date'),
             )
-            latest_subtask_date = max(
-                (
-                    day for day in latest_dates.values()
-                    if day is not None
-                ),
-                default=None,
-            )
-            if latest_subtask_date and data['date_event'] < latest_subtask_date:
+            latest_due_date = latest_dates['latest_due_date']
+            if latest_due_date and data['date_event'] < latest_due_date:
                 raise serializers.ValidationError({
                     'date_event': (
                         'La fecha del evento no puede ser anterior a la fecha '
-                        'límite o programada de una de sus gestiones.'
+                        'límite de una de sus gestiones.'
                     )
                 })
         return data
