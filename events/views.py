@@ -17,6 +17,7 @@ from .models import (
 from .serializers import (
     ActivitySerializer, SubtaskSerializer, DailyCapacitySerializer,
     DailyLimitSerializer, ResolutionMoveSerializer, ResolutionReduceHoursSerializer,
+    ExecutionRegistrationSerializer,
 )
 from .services import (
     RESOLUTION_OPTIONS, OverloadConflict, find_overloaded_days,
@@ -75,6 +76,7 @@ class ActivityViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    @swagger_auto_schema(operation_summary='Consultar el progreso de preparación del evento')
     @action(detail=True, methods=['get'])
     def progreso(self, request, pk=None):
         activity = self.get_object()
@@ -99,6 +101,28 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+    @swagger_auto_schema(
+        request_body=ExecutionRegistrationSerializer,
+        operation_summary='Registrar una tarea como hecha o pospuesta',
+    )
+    @action(detail=True, methods=['patch'], url_path='registrar-ejecucion')
+    @transaction.atomic
+    def registrar_ejecucion(self, request, pk=None):
+        self._lock_organizer()
+        subtask = self.get_object()
+        input_serializer = ExecutionRegistrationSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        serializer = SubtaskSerializer(
+            subtask,
+            data=input_serializer.validated_data,
+            partial=True,
+            context={'request': request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
     def handle_exception(self, exc):
         if isinstance(exc, OverloadConflict):
