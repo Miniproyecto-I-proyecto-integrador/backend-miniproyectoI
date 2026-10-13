@@ -166,3 +166,17 @@ class ResolutionReduceHoursSerializer(serializers.Serializer):
         decimal_places=1,
         min_value=Decimal('0.1'),
     )
+
+
+class ExecutionRegistrationSerializer(serializers.Serializer):
+    """US-09: valida el estado final y los datos de una tarea ejecutada o pospuesta."""
+    status = serializers.ChoiceField(choices=('done', 'postponed'))
+    note = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    due_date = serializers.DateField(required=False)
+
+    def validate(self, attrs):
+        if attrs.get('status') == 'done' and 'due_date' in attrs:
+            raise serializers.ValidationError({
+                'due_date': 'Solo se puede indicar una nueva fecha al posponer la tarea.'
+            })
+        return attrs
