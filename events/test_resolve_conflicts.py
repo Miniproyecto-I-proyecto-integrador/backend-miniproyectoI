@@ -56,6 +56,29 @@ class HU08ResolutionTests(APITestCase):
             estimated_hours=Decimal('5.0'),
         )
 
+    def test_postponed_task_can_be_suggested_and_moved(self):
+        self.subtask.status = 'postponed'
+        self.subtask.save(update_fields=['status'])
+
+        suggestion_response = self.client.get(
+            reverse('subtask-sugerir-dia', args=[self.subtask.id]),
+            {'today': self.today.isoformat()},
+        )
+
+        self.assertEqual(suggestion_response.status_code, status.HTTP_200_OK)
+        suggested_day = suggestion_response.data['suggestion']['date']
+        move_response = self.client.patch(
+            reverse('subtask-resolver-mover', args=[self.subtask.id]),
+            {'due_date': suggested_day},
+            format='json',
+        )
+
+        self.assertEqual(move_response.status_code, status.HTTP_200_OK)
+        self.assertTrue(move_response.data['conflict_resolved'])
+        self.subtask.refresh_from_db()
+        self.assertEqual(self.subtask.status, 'postponed')
+        self.assertEqual(self.subtask.due_date.isoformat(), suggested_day)
+
     def test_suggests_first_available_day_after_today_before_original_due_date(self):
         response = self.client.get(
             reverse(

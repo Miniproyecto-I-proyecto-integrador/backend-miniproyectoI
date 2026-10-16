@@ -125,7 +125,7 @@ class OverloadDetectionTests(ConflictTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
-    def test_only_pending_and_in_progress_tasks_count(self):
+    def test_pending_in_progress_and_postponed_tasks_count(self):
         self.make(self.day_x, 3, status_='done')
         self.make(self.day_x, 3, status_='postponed')
         self.make(self.day_x, 2, status_='in_progress')
@@ -134,8 +134,8 @@ class OverloadDetectionTests(ConflictTestBase):
         response = self.create_via_api(self.day_x, 3)
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data['conflict']['current_hours'], 4.0)
-        self.assertEqual(response.data['conflict']['total_hours'], 7.0)
+        self.assertEqual(response.data['conflict']['current_hours'], 7.0)
+        self.assertEqual(response.data['conflict']['total_hours'], 10.0)
 
     def test_half_hours_are_formatted_without_trailing_zeros(self):
         self.make(self.day_x, 5.5)
@@ -212,21 +212,23 @@ class OverloadedDayStaysResolvableTests(ConflictTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_reactivating_a_postponed_task_on_a_full_day_is_blocked(self):
+    def test_reactivating_a_postponed_task_does_not_add_daily_load(self):
         postponed = self.make(self.day_x, 2, status_='postponed')
 
         response = self.patch(postponed, {'status': 'pending'})
 
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.assertEqual(response.data['conflict']['total_hours'], 10.0)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        postponed.refresh_from_db()
+        self.assertEqual(postponed.status, 'pending')
 
 
 class DailySummaryTests(ConflictTestBase):
-    """El resumen usa due_date, estados activos y el límite del usuario."""
+    """El resumen usa due_date, estados planificados y el límite del usuario."""
 
-    def test_summary_counts_active_tasks_of_the_day(self):
+    def test_summary_counts_pending_in_progress_and_postponed_tasks_of_the_day(self):
         self.make(self.day_x, 3)
         self.make(self.day_x, 1.5, status_='in_progress')
+        self.make(self.day_x, 2, status_='postponed')
         self.make(self.day_x, 4, status_='done')
         self.make(self.day_y, 2)
 
@@ -235,10 +237,10 @@ class DailySummaryTests(ConflictTestBase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data, {
             'date': self.day_x.isoformat(),
-            'assigned_hours': 4.5,
+            'assigned_hours': 6.5,
             'limit_hours': 6,
-            'remaining_hours': 1.5,
-            'overloaded': False,
+            'remaining_hours': 0.0,
+            'overloaded': True,
         })
 
     def test_summary_flags_overload_only_above_the_limit(self):
@@ -321,14 +323,16 @@ class LowerLimitWarningTests(ConflictTestBase):
 
         self.assertEqual(response.data['overloaded_days'], [])
 
-    def test_past_days_and_inactive_tasks_are_not_reported(self):
+    def test_past_days_and_done_tasks_are_not_reported(self):
         self.make(self.today - timedelta(days=2), 8)
         self.make(self.day_x, 8, status_='done')
         self.make(self.day_y, 8, status_='postponed')
 
         response = self.client.put(self.url, {'daily_hours_limit': 4}, format='json')
 
-        self.assertEqual(response.data['overloaded_days'], [])
+        overloaded_days = response.data['overloaded_days']
+        self.assertEqual([day['date'] for day in overloaded_days], [self.day_y.isoformat()])
+        self.assertEqual(overloaded_days[0]['total_hours'], 8.0)
 
     def test_other_organizers_tasks_are_not_reported(self):
         self.make(self.day_x, 8, user=self.other)
