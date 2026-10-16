@@ -20,7 +20,7 @@ from .serializers import (
     ExecutionRegistrationSerializer,
 )
 from .services import (
-    RESOLUTION_OPTIONS, OverloadConflict, find_overloaded_days,
+    PLANNED_STATUSES, RESOLUTION_OPTIONS, OverloadConflict, find_overloaded_days,
     get_daily_limit, get_day_load, set_daily_limit, check_day_capacity,
     suggest_available_day,
 )
@@ -135,7 +135,7 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='sugerir-dia')
     def sugerir_dia(self, request, pk=None):
         subtask = self.get_object()
-        if subtask.status not in ('pending', 'in_progress'):
+        if subtask.status not in PLANNED_STATUSES:
             return Response(
                 {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -175,7 +175,7 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
     def resolver_mover(self, request, pk=None):
         self._lock_organizer()
         subtask = self.get_object()
-        if subtask.status not in ('pending', 'in_progress'):
+        if subtask.status not in PLANNED_STATUSES:
             return Response(
                 {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -227,7 +227,7 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
     def resolver_reducir(self, request, pk=None):
         self._lock_organizer()
         subtask = self.get_object()
-        if subtask.status not in ('pending', 'in_progress'):
+        if subtask.status not in PLANNED_STATUSES:
             return Response(
                 {'detail': 'Solo se puede resolver un conflicto de una gestión activa.'},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -281,7 +281,7 @@ class DailyCapacityViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='resumen')
     def resumen(self, request):
-        """Carga de un día usando due_date y solo gestiones activas.
+        """Carga de un día usando due_date y solo gestiones planificadas.
 
         ``?date=AAAA-MM-DD`` permite consultar un día concreto. Si no se
         envía, se usa ``?today=AAAA-MM-DD`` del cliente y, como respaldo,

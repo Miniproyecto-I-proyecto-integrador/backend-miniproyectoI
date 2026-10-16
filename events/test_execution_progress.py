@@ -66,6 +66,32 @@ class ExecutionRegistrationTests(APITestCase):
         self.assertEqual(self.subtask.due_date, new_date)
         self.assertEqual(response.data['due_date'], new_date.isoformat())
 
+    def test_postponing_to_an_overloaded_day_is_rejected(self):
+        new_date = self.subtask.due_date + timedelta(days=3)
+        type(self.subtask).objects.create(
+            user=self.user,
+            activity=self.activity,
+            name='Otra gestión',
+            due_date=new_date,
+            scheduled_date=new_date,
+            estimated_hours='5.0',
+        )
+
+        response = self.client.patch(
+            self.url,
+            {
+                'status': 'postponed',
+                'due_date': new_date.isoformat(),
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data['conflict']['total_hours'], 7.0)
+        self.subtask.refresh_from_db()
+        self.assertEqual(self.subtask.status, 'pending')
+        self.assertNotEqual(self.subtask.due_date, new_date)
+
     def test_note_and_new_date_are_optional_when_postponing(self):
         original_date = self.subtask.due_date
         response = self.client.patch(
@@ -192,4 +218,3 @@ class ActivityProgressTests(APITestCase):
         self.assertEqual(response.data['progress'], 25)
         self.assertEqual(response.data['completed_subtasks'], 1)
         self.assertEqual(response.data['total_subtasks'], 4)
-

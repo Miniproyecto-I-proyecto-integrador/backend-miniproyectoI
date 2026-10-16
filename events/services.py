@@ -2,9 +2,8 @@
 
 Reglas acordadas para la carga diaria (HU-07 / HU-08 / HU-12):
 - La fecha que cuenta es ``due_date`` (fecha límite de la gestión).
-- Solo ocupan tiempo las gestiones ``pending`` e ``in_progress``. Una gestión
-  ``done`` ya se ejecutó y una ``postponed`` se sacó del día (posponer es una de
-  las formas de resolver un conflicto).
+- Ocupan tiempo las gestiones ``pending``, ``in_progress`` y ``postponed``.
+- ``done`` ya se ejecutó y se excluye de la carga diaria.
 - Solo se consideran las gestiones del propio organizador.
 - El límite diario es configurable por organizador (6 h por defecto).
 """
@@ -18,7 +17,7 @@ from django.utils import timezone
 from .models import DEFAULT_DAILY_HOURS_LIMIT, OrganizerSettings, Subtask
 
 # Estados que cuentan como carga de trabajo del día.
-ACTIVE_STATUSES = ('pending', 'in_progress')
+PLANNED_STATUSES = ('pending', 'in_progress', 'postponed')
 
 # Alternativas que el frontend debe ofrecer ante un conflicto (HU-07 esc. 3).
 RESOLUTION_OPTIONS = ('move', 'reduce_hours', 'postpone')
@@ -59,18 +58,18 @@ def format_hours(value):
     return format(Decimal(str(value)).normalize(), 'f')
 
 
-def _active_subtasks(user):
-    """Gestiones del organizador que ocupan tiempo (ver ACTIVE_STATUSES)."""
+def _planned_subtasks(user):
+    """Gestiones del organizador que todavía representan trabajo planificado."""
     return Subtask.objects.filter(
         user=user,
         activity__user=user,
-        status__in=ACTIVE_STATUSES,
+        status__in=PLANNED_STATUSES,
     )
 
 
 def get_day_load(user, day, exclude_id=None):
-    """Horas de gestión activas del organizador para un día (due_date)."""
-    queryset = _active_subtasks(user).filter(due_date=day)
+    """Horas de trabajo planificado del organizador para un día (due_date)."""
+    queryset = _planned_subtasks(user).filter(due_date=day)
     if exclude_id is not None:
         queryset = queryset.exclude(pk=exclude_id)
     return queryset.aggregate(total=Sum('estimated_hours'))['total'] or Decimal('0')
@@ -130,7 +129,7 @@ def find_overloaded_days(user, limit=None, from_date=None):
     totals = {
         row['due_date']: row['total']
         for row in (
-            _active_subtasks(user)
+            _planned_subtasks(user)
             .filter(due_date__gte=from_date)
             .values('due_date')
             .annotate(total=Sum('estimated_hours'))
@@ -143,7 +142,7 @@ def find_overloaded_days(user, limit=None, from_date=None):
 
     by_day = defaultdict(list)
     subtasks = (
-        _active_subtasks(user)
+        _planned_subtasks(user)
         .filter(due_date__in=list(totals))
         .select_related('activity')
         .order_by('due_date', 'id')

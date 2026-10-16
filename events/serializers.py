@@ -5,7 +5,7 @@ from .models import (
     Activity, Subtask, DailyCapacity,
     MIN_DAILY_HOURS_LIMIT, MAX_DAILY_HOURS_LIMIT,
 )
-from .services import ACTIVE_STATUSES, OverloadConflict, check_day_capacity
+from .services import PLANNED_STATUSES, OverloadConflict, check_day_capacity
 
 
 class SubtaskSerializer(serializers.ModelSerializer):
@@ -52,13 +52,13 @@ class SubtaskSerializer(serializers.ModelSerializer):
         día ya sobrecargado (p. ej. tras bajar el límite) se puede seguir
         resolviendo sin quedar bloqueado.
         """
-        if not due_date or not estimated_hours or status not in ACTIVE_STATUSES:
+        if not due_date or not estimated_hours or status not in PLANNED_STATUSES:
             return
 
         previous = self.instance
         if (
             previous is not None
-            and previous.status in ACTIVE_STATUSES
+            and previous.status in PLANNED_STATUSES
             and previous.due_date == due_date
             and estimated_hours <= previous.estimated_hours
         ):
