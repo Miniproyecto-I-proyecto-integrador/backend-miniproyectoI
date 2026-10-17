@@ -153,6 +153,7 @@ def find_overloaded_days(user, limit=None, from_date=None):
             'name': subtask.name,
             'activity_id': subtask.activity_id,
             'activity_name': subtask.activity.name,
+            'event_date': subtask.activity.date_event.isoformat(),
             'estimated_hours': float(subtask.estimated_hours),
             'status': subtask.status,
         })

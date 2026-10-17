@@ -171,3 +171,133 @@ class DailyLimitAffectsConflictDetectionTests(APITestCase):
 
         self.assertEqual(response.data['limit_hours'], 4)
         self.assertTrue(response.data['overloaded'])
+
+
+class DailyLimitConflictWorkflowTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user('workflow_user', 'workflow@example.com', PASSWORD)
+        self.client.force_authenticate(user=self.user)
+        self.today = date(2026, 10, 16)
+        self.activity = Activity.objects.create(
+            user=self.user,
+            name='Evento',
+            date_event=date(2026, 10, 30),
+        )
+        self.conflict_day = date(2026, 10, 20)
+        self.decoration = self.make_subtask('Decoración', self.conflict_day, '3.0')
+        self.food = self.make_subtask('Comida', self.conflict_day, '3.0')
+        self.preview_url = reverse('daily-limit-preview')
+        self.apply_url = reverse('daily-limit-apply')
+
+    def make_subtask(self, name, due_date, hours):
+        return Subtask.objects.create(
+            user=self.user,
+            activity=self.activity,
+            name=name,
+            due_date=due_date,
+            scheduled_date=due_date,
+            estimated_hours=Decimal(hours),
+        )
+
+    def preview(self, limit=5):
+        return self.client.post(
+            self.preview_url,
+            {'daily_hours_limit': limit, 'today': self.today.isoformat()},
+            format='json',
+        )
+
+    def test_preview_returns_conflicts_and_available_dates_without_saving(self):
+        response = self.preview()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['has_conflicts'])
+        day = response.data['overloaded_days'][0]
+        self.assertEqual(day['total_hours'], 6.0)
+        self.assertEqual(day['excess_hours'], 1.0)
+        self.assertTrue(day['subtasks'][0]['suggested_dates'])
+        self.assertEqual(
+            day['subtasks'][0]['suggested_dates'][0]['total_hours'],
+            3.0,
+        )
+        self.assertEqual(get_daily_limit(self.user), 6)
+        self.assertEqual(self.decoration.due_date, self.conflict_day)
+
+    def test_apply_reduces_hours_and_saves_limit_together(self):
+        response = self.client.post(
+            self.apply_url,
+            {
+                'daily_hours_limit': 5,
+                'today': self.today.isoformat(),
+                'changes': [{
+                    'subtask_id': self.food.id,
+                    'action': 'reduce_hours',
+                    'estimated_hours': '2.0',
+                }],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertFalse(response.data['has_conflicts'])
+        self.assertEqual(get_daily_limit(self.user), 5)
+        self.food.refresh_from_db()
+        self.assertEqual(self.food.estimated_hours, Decimal('2.0'))
+
+    def test_apply_moves_and_reduces_in_same_transaction(self):
+        next_day = date(2026, 10, 21)
+        response = self.client.post(
+            self.apply_url,
+            {
+                'daily_hours_limit': 5,
+                'today': self.today.isoformat(),
+                'changes': [
+                    {
+                        'subtask_id': self.decoration.id,
+                        'action': 'move',
+                        'due_date': next_day.isoformat(),
+                    },
+                    {
+                        'subtask_id': self.food.id,
+                        'action': 'reduce_hours',
+                        'estimated_hours': '2.0',
+                    },
+                ],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.decoration.refresh_from_db()
+        self.food.refresh_from_db()
+        self.assertEqual(self.decoration.due_date, next_day)
+        self.assertEqual(self.food.estimated_hours, Decimal('2.0'))
+        self.assertEqual(get_daily_limit(self.user), 5)
+
+    def test_unresolved_conflict_leaves_limit_and_subtasks_unchanged(self):
+        other_day = date(2026, 10, 22)
+        third = self.make_subtask('Flores', other_day, '3.0')
+        fourth = self.make_subtask('Música', other_day, '3.0')
+
+        response = self.client.post(
+            self.apply_url,
+            {
+                'daily_hours_limit': 5,
+                'today': self.today.isoformat(),
+                'changes': [{
+                    'subtask_id': self.food.id,
+                    'action': 'reduce_hours',
+                    'estimated_hours': '2.0',
+                }],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(response.data['overloaded_days'])
+        self.assertEqual(get_daily_limit(self.user), 6)
+        self.food.refresh_from_db()
+        third.refresh_from_db()
+        fourth.refresh_from_db()
+        self.assertEqual(self.food.estimated_hours, Decimal('3.0'))
+        self.assertEqual(third.due_date, other_day)
+        self.assertEqual(fourth.due_date, other_day)

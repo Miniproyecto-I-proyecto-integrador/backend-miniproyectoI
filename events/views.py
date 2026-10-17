@@ -1,3 +1,4 @@
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -16,7 +17,8 @@ from .models import (
 )
 from .serializers import (
     ActivitySerializer, SubtaskSerializer, DailyCapacitySerializer,
-    DailyLimitSerializer, ResolutionMoveSerializer, ResolutionReduceHoursSerializer,
+    DailyLimitSerializer, DailyLimitPreviewSerializer, DailyLimitApplySerializer,
+    ResolutionMoveSerializer, ResolutionReduceHoursSerializer,
     ExecutionRegistrationSerializer,
 )
 from .services import (
@@ -378,3 +380,213 @@ class DailyLimitView(APIView):
     )
     def patch(self, request):
         return self._update(request)
+
+
+def _planned_loads_and_subtasks(user, from_date):
+    subtasks = list(
+        Subtask.objects.filter(
+            user=user,
+            activity__user=user,
+            status__in=PLANNED_STATUSES,
+            due_date__gte=from_date,
+        )
+        .select_related('activity')
+        .order_by('due_date', 'id')
+    )
+    loads = {}
+    for subtask in subtasks:
+        loads[subtask.due_date] = (
+            loads.get(subtask.due_date, Decimal('0')) + subtask.estimated_hours
+        )
+    return subtasks, loads
+
+
+def _overloaded_days_from_plan(subtasks, loads, limit, projected=None):
+    tasks_by_day = {}
+    for subtask in subtasks:
+        change = projected.get(subtask.id) if projected else None
+        due_date = change['due_date'] if change else subtask.due_date
+        estimated_hours = (
+            change['estimated_hours'] if change else subtask.estimated_hours
+        )
+        tasks_by_day.setdefault(due_date, []).append({
+            'id': subtask.id,
+            'name': subtask.name,
+            'activity_id': subtask.activity_id,
+            'activity_name': subtask.activity.name,
+            'estimated_hours': float(estimated_hours),
+            'status': subtask.status,
+        })
+    return [
+        {
+            'date': day.isoformat(),
+            'total_hours': float(total),
+            'limit_hours': limit,
+            'excess_hours': float(total - limit),
+            'subtasks': tasks_by_day[day],
+        }
+        for day, total in sorted(loads.items())
+        if total > limit
+    ]
+
+
+class DailyLimitConflictPreviewView(APIView):
+    @swagger_auto_schema(
+        request_body=DailyLimitPreviewSerializer,
+        operation_summary='Previsualizar conflictos antes de cambiar el límite diario',
+    )
+    def post(self, request):
+        serializer = DailyLimitPreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        limit = serializer.validated_data['daily_hours_limit']
+        today = serializer.validated_data['today']
+        subtasks, loads = _planned_loads_and_subtasks(request.user, today)
+        overloaded_days = _overloaded_days_from_plan(subtasks, loads, limit)
+        tasks_by_id = {subtask.id: subtask for subtask in subtasks}
+
+        for day in overloaded_days:
+            for task_data in day['subtasks']:
+                subtask = tasks_by_id[task_data['id']]
+                candidates = []
+                candidate_day = today + timedelta(days=1)
+                while candidate_day <= subtask.activity.date_event and len(candidates) < 3:
+                    current = loads.get(candidate_day, Decimal('0'))
+                    if subtask.due_date == candidate_day:
+                        current -= subtask.estimated_hours
+                    projected = current + subtask.estimated_hours
+                    if projected <= limit:
+                        candidates.append({
+                            'date': candidate_day.isoformat(),
+                            'current_hours': float(current),
+                            'total_hours': float(projected),
+                            'limit_hours': limit,
+                        })
+                    candidate_day += timedelta(days=1)
+                task_data['suggested_dates'] = candidates
+
+        return Response({
+            'daily_hours_limit': limit,
+            'has_conflicts': bool(overloaded_days),
+            'overloaded_days': overloaded_days,
+            'daily_loads': [
+                {'date': day.isoformat(), 'total_hours': float(total)}
+                for day, total in sorted(loads.items())
+            ],
+        })
+
+
+class DailyLimitConflictApplyView(APIView):
+    @transaction.atomic
+    @swagger_auto_schema(
+        request_body=DailyLimitApplySerializer,
+        operation_summary='Guardar límite diario y resolver conflictos en una transacción',
+    )
+    def post(self, request):
+        serializer = DailyLimitApplySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        values = serializer.validated_data
+        limit = values['daily_hours_limit']
+        today = values['today']
+
+        request.user.__class__.objects.select_for_update().only('pk').get(
+            pk=request.user.pk,
+        )
+
+        subtasks, loads = _planned_loads_and_subtasks(request.user, today)
+        tasks_by_id = {subtask.id: subtask for subtask in subtasks}
+        changes = values['changes']
+        projected = {
+            subtask.id: {
+                'due_date': subtask.due_date,
+                'estimated_hours': subtask.estimated_hours,
+            }
+            for subtask in subtasks
+        }
+
+        for change in changes:
+            subtask = tasks_by_id.get(change['subtask_id'])
+            if subtask is None:
+                return Response(
+                    {'detail': 'Una de las gestiones ya no está activa o no te pertenece.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if change['action'] == 'move':
+                new_date = change['due_date']
+                if new_date < today or new_date > subtask.activity.date_event:
+                    return Response(
+                        {'due_date': 'La fecha debe estar entre hoy y la fecha del evento.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if new_date == subtask.due_date:
+                    return Response(
+                        {'due_date': 'La nueva fecha debe ser diferente a la actual.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                projected[subtask.id]['due_date'] = new_date
+            else:
+                new_hours = change['estimated_hours']
+                if (
+                    new_hours >= subtask.estimated_hours
+                    or new_hours % Decimal('0.5') != 0
+                ):
+                    return Response(
+                        {
+                            'estimated_hours': (
+                                'Las horas deben reducirse en incrementos de 0.5 '
+                                'y no pueden ser menores que las actuales.'
+                            )
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                projected[subtask.id]['estimated_hours'] = new_hours
+
+        projected_loads = {}
+        for subtask in subtasks:
+            change = projected[subtask.id]
+            projected_loads[change['due_date']] = (
+                projected_loads.get(change['due_date'], Decimal('0'))
+                + change['estimated_hours']
+            )
+
+        overloaded_days = _overloaded_days_from_plan(
+            subtasks,
+            projected_loads,
+            limit,
+            projected=projected,
+        )
+        if overloaded_days:
+            return Response({
+                'detail': 'Aún hay días que superan el nuevo límite.',
+                'daily_hours_limit': limit,
+                'has_conflicts': True,
+                'overloaded_days': overloaded_days,
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        applied_changes = []
+        for change in changes:
+            subtask = tasks_by_id[change['subtask_id']]
+            updated = projected[subtask.id]
+            update_fields = []
+            if subtask.due_date != updated['due_date']:
+                subtask.due_date = updated['due_date']
+                update_fields.append('due_date')
+            if subtask.estimated_hours != updated['estimated_hours']:
+                subtask.estimated_hours = updated['estimated_hours']
+                update_fields.append('estimated_hours')
+            if update_fields:
+                subtask.save(update_fields=update_fields)
+            applied_changes.append({
+                'subtask_id': subtask.id,
+                'action': change['action'],
+                'due_date': subtask.due_date.isoformat(),
+                'estimated_hours': float(subtask.estimated_hours),
+            })
+
+        set_daily_limit(request.user, limit)
+        return Response({
+            'daily_hours_limit': limit,
+            'has_conflicts': False,
+            'overloaded_days': [],
+            'changes': applied_changes,
+        })

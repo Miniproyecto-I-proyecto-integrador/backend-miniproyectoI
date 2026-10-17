@@ -143,6 +143,50 @@ class DailyLimitSerializer(serializers.Serializer):
     )
 
 
+class DailyLimitPreviewSerializer(DailyLimitSerializer):
+    today = serializers.DateField()
+
+
+class DailyLimitChangeSerializer(serializers.Serializer):
+    subtask_id = serializers.IntegerField(min_value=1)
+    action = serializers.ChoiceField(choices=('move', 'reduce_hours'))
+    due_date = serializers.DateField(required=False)
+    estimated_hours = serializers.DecimalField(
+        max_digits=4,
+        decimal_places=1,
+        min_value=Decimal('0.5'),
+        required=False,
+    )
+
+    def validate(self, attrs):
+        if attrs['action'] == 'move':
+            if 'due_date' not in attrs or 'estimated_hours' in attrs:
+                raise serializers.ValidationError(
+                    'Mover requiere due_date y no admite estimated_hours.'
+                )
+        elif 'estimated_hours' not in attrs or 'due_date' in attrs:
+            raise serializers.ValidationError(
+                'Reducir horas requiere estimated_hours y no admite due_date.'
+            )
+        elif attrs['estimated_hours'] % Decimal('0.5') != 0:
+            raise serializers.ValidationError(
+                {'estimated_hours': 'Las horas deben avanzar en incrementos de 0.5.'}
+            )
+        return attrs
+
+
+class DailyLimitApplySerializer(DailyLimitPreviewSerializer):
+    changes = DailyLimitChangeSerializer(many=True, required=False, default=list)
+
+    def validate_changes(self, changes):
+        subtask_ids = [change['subtask_id'] for change in changes]
+        if len(subtask_ids) != len(set(subtask_ids)):
+            raise serializers.ValidationError(
+                'Cada subtarea solo puede aparecer una vez.'
+            )
+        return changes
+
+
 class DailyCapacitySerializer(serializers.ModelSerializer):
     class Meta:
         model = DailyCapacity
