@@ -219,3 +219,15 @@ class ActivityProgressTests(APITestCase):
         self.assertEqual(response.data['progress'], 25)
         self.assertEqual(response.data['completed_subtasks'], 1)
         self.assertEqual(response.data['total_subtasks'], 4)
+
+    def test_progress_is_complete_when_every_subtask_is_done(self):
+        self.make_subtask('Salón', 'done')
+        self.make_subtask('Catering', 'done')
+        self.make_subtask('Música', 'done')
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['progress'], 100)
+        self.assertEqual(response.data['completed_subtasks'], 3)
+        self.assertEqual(response.data['total_subtasks'], 3)
