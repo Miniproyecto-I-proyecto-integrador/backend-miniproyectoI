@@ -78,6 +78,13 @@ class ActivityViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def perform_update(self, serializer):
+        activity = serializer.save()
+        Subtask.objects.filter(
+            activity=activity,
+            user=self.request.user,
+        ).update(due_date=activity.date_event)
+
     @swagger_auto_schema(operation_summary='Consultar el progreso de preparación del evento')
     @action(detail=True, methods=['get'])
     def progreso(self, request, pk=None):
@@ -185,20 +192,20 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
 
         input_serializer = ResolutionMoveSerializer(data=request.data)
         input_serializer.is_valid(raise_exception=True)
-        new_date = input_serializer.validated_data['due_date']
+        new_date = input_serializer.validated_data['scheduled_date']
 
-        if new_date == subtask.due_date:
+        if new_date == subtask.scheduled_date:
             return Response(
-                {'due_date': ['La nueva fecha debe ser diferente a la fecha actual.']},
+                {'scheduled_date': ['La nueva fecha debe ser diferente a la fecha actual.']},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        origin_date = subtask.due_date
+        origin_date = subtask.scheduled_date
 
         with transaction.atomic():
             serializer = SubtaskSerializer(
                 subtask,
-                data={'due_date': new_date},
+                data={'scheduled_date': new_date},
                 partial=True,
                 context={'request': request},
             )
@@ -257,7 +264,7 @@ class SubtaskViewSet(OrganizerMutationLockMixin, viewsets.ModelViewSet):
 
         info = check_day_capacity(
             request.user,
-            subtask.due_date,
+            subtask.scheduled_date,
             subtask.estimated_hours,
             exclude_id=subtask.id,
         )
@@ -283,7 +290,7 @@ class DailyCapacityViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=['get'], url_path='resumen')
     def resumen(self, request):
-        """Carga de un día usando due_date y solo gestiones planificadas.
+        """Carga de un día usando scheduled_date y solo gestiones planificadas.
 
         ``?date=AAAA-MM-DD`` permite consultar un día concreto. Si no se
         envía, se usa ``?today=AAAA-MM-DD`` del cliente y, como respaldo,
@@ -388,15 +395,15 @@ def _planned_loads_and_subtasks(user, from_date):
             user=user,
             activity__user=user,
             status__in=PLANNED_STATUSES,
-            due_date__gte=from_date,
+            scheduled_date__gte=from_date,
         )
         .select_related('activity')
-        .order_by('due_date', 'id')
+        .order_by('scheduled_date', 'id')
     )
     loads = {}
     for subtask in subtasks:
-        loads[subtask.due_date] = (
-            loads.get(subtask.due_date, Decimal('0')) + subtask.estimated_hours
+        loads[subtask.scheduled_date] = (
+            loads.get(subtask.scheduled_date, Decimal('0')) + subtask.estimated_hours
         )
     return subtasks, loads
 
@@ -405,11 +412,13 @@ def _overloaded_days_from_plan(subtasks, loads, limit, projected=None):
     tasks_by_day = {}
     for subtask in subtasks:
         change = projected.get(subtask.id) if projected else None
-        due_date = change['due_date'] if change else subtask.due_date
+        scheduled_date = (
+            change['scheduled_date'] if change else subtask.scheduled_date
+        )
         estimated_hours = (
             change['estimated_hours'] if change else subtask.estimated_hours
         )
-        tasks_by_day.setdefault(due_date, []).append({
+        tasks_by_day.setdefault(scheduled_date, []).append({
             'id': subtask.id,
             'name': subtask.name,
             'activity_id': subtask.activity_id,
@@ -451,7 +460,7 @@ class DailyLimitConflictPreviewView(APIView):
                 candidate_day = today + timedelta(days=1)
                 while candidate_day <= subtask.activity.date_event and len(candidates) < 3:
                     current = loads.get(candidate_day, Decimal('0'))
-                    if subtask.due_date == candidate_day:
+                    if subtask.scheduled_date == candidate_day:
                         current -= subtask.estimated_hours
                     projected = current + subtask.estimated_hours
                     if projected <= limit:
@@ -497,7 +506,7 @@ class DailyLimitConflictApplyView(APIView):
         changes = values['changes']
         projected = {
             subtask.id: {
-                'due_date': subtask.due_date,
+                'scheduled_date': subtask.scheduled_date,
                 'estimated_hours': subtask.estimated_hours,
             }
             for subtask in subtasks
@@ -512,18 +521,18 @@ class DailyLimitConflictApplyView(APIView):
                 )
 
             if change['action'] == 'move':
-                new_date = change['due_date']
+                new_date = change['scheduled_date']
                 if new_date < today or new_date > subtask.activity.date_event:
                     return Response(
-                        {'due_date': 'La fecha debe estar entre hoy y la fecha del evento.'},
+                        {'scheduled_date': 'La fecha debe estar entre hoy y la fecha del evento.'},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                if new_date == subtask.due_date:
+                if new_date == subtask.scheduled_date:
                     return Response(
-                        {'due_date': 'La nueva fecha debe ser diferente a la actual.'},
+                        {'scheduled_date': 'La nueva fecha debe ser diferente a la actual.'},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
-                projected[subtask.id]['due_date'] = new_date
+                projected[subtask.id]['scheduled_date'] = new_date
             else:
                 new_hours = change['estimated_hours']
                 if (
@@ -544,8 +553,8 @@ class DailyLimitConflictApplyView(APIView):
         projected_loads = {}
         for subtask in subtasks:
             change = projected[subtask.id]
-            projected_loads[change['due_date']] = (
-                projected_loads.get(change['due_date'], Decimal('0'))
+            projected_loads[change['scheduled_date']] = (
+                projected_loads.get(change['scheduled_date'], Decimal('0'))
                 + change['estimated_hours']
             )
 
@@ -568,9 +577,9 @@ class DailyLimitConflictApplyView(APIView):
             subtask = tasks_by_id[change['subtask_id']]
             updated = projected[subtask.id]
             update_fields = []
-            if subtask.due_date != updated['due_date']:
-                subtask.due_date = updated['due_date']
-                update_fields.append('due_date')
+            if subtask.scheduled_date != updated['scheduled_date']:
+                subtask.scheduled_date = updated['scheduled_date']
+                update_fields.append('scheduled_date')
             if subtask.estimated_hours != updated['estimated_hours']:
                 subtask.estimated_hours = updated['estimated_hours']
                 update_fields.append('estimated_hours')
@@ -580,6 +589,7 @@ class DailyLimitConflictApplyView(APIView):
                 'subtask_id': subtask.id,
                 'action': change['action'],
                 'due_date': subtask.due_date.isoformat(),
+                'scheduled_date': subtask.scheduled_date.isoformat(),
                 'estimated_hours': float(subtask.estimated_hours),
             })
 

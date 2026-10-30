@@ -12,7 +12,7 @@ PASSWORD = 'V3ry-long-Test-P@ssw0rd!'
 
 
 class CriticalFixesTests(APITestCase):
-    """Correcciones: gestiones vencidas, fechas y scheduled_date."""
+    """Correcciones: gestiones vencidas, fechas y fecha programada."""
 
     def setUp(self):
         self.user = User.objects.create_user('org', 'org@example.com', PASSWORD)
@@ -27,7 +27,7 @@ class CriticalFixesTests(APITestCase):
         scheduled_offset = due_offset if scheduled_offset is None else scheduled_offset
         return Subtask.objects.create(
             user=self.user, activity=self.activity, name='Gestión',
-            due_date=self.today + timedelta(days=due_offset),
+            due_date=self.event_day,
             scheduled_date=self.today + timedelta(days=scheduled_offset),
             estimated_hours=hours, **extra,
         )
@@ -134,8 +134,8 @@ class CriticalFixesTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
 
-    # scheduled_date is retained for compatibility but does not control scheduling.
-    def test_scheduled_after_due_is_allowed_on_create(self):
+    # La fecha programada puede ser posterior a un plazo antiguo, hasta el evento.
+    def test_scheduled_after_legacy_due_date_is_allowed_on_create(self):
         response = self.client.post('/api/subtareas/', self.payload(
             due_date=(self.today + timedelta(days=3)).isoformat(),
             scheduled_date=(self.today + timedelta(days=9)).isoformat(),
@@ -148,7 +148,7 @@ class CriticalFixesTests(APITestCase):
         ), format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
 
-    def test_scheduled_after_due_is_allowed_on_patch(self):
+    def test_scheduled_after_legacy_due_date_is_allowed_on_patch(self):
         subtask = self.make_subtask(5, 4)
         response = self.client.patch(
             f'/api/subtareas/{subtask.id}/',
@@ -167,7 +167,7 @@ class CriticalFixesTests(APITestCase):
             due_date=day, scheduled_date=day), format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.json())
 
-    def test_move_earlier_does_not_change_scheduled_date(self):
+    def test_move_earlier_changes_scheduled_date_not_event_deadline(self):
         subtask = self.make_subtask(due_offset=8, scheduled_offset=7)
         original_scheduled = subtask.scheduled_date
         new_due = self.today + timedelta(days=3)
@@ -177,10 +177,11 @@ class CriticalFixesTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
         subtask.refresh_from_db()
-        self.assertEqual(subtask.due_date, new_due)
-        self.assertEqual(subtask.scheduled_date, original_scheduled)
+        self.assertEqual(subtask.due_date, self.event_day)
+        self.assertNotEqual(subtask.scheduled_date, original_scheduled)
+        self.assertEqual(subtask.scheduled_date, new_due)
 
-    def test_move_later_keeps_scheduled_untouched(self):
+    def test_move_later_updates_scheduled_date_not_event_deadline(self):
         subtask = self.make_subtask(due_offset=5, scheduled_offset=4)
         original_scheduled = subtask.scheduled_date
         response = self.client.patch(
@@ -189,4 +190,6 @@ class CriticalFixesTests(APITestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.json())
         subtask.refresh_from_db()
-        self.assertEqual(subtask.scheduled_date, original_scheduled)
+        self.assertNotEqual(subtask.scheduled_date, original_scheduled)
+        self.assertEqual(subtask.scheduled_date, self.today + timedelta(days=9))
+        self.assertEqual(subtask.due_date, self.event_day)

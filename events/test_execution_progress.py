@@ -29,7 +29,7 @@ class ExecutionRegistrationTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name='Confirmar salón',
-            due_date=today + timedelta(days=5),
+            due_date=self.activity.date_event,
             scheduled_date=today + timedelta(days=4),
             estimated_hours='2.0',
         )
@@ -48,7 +48,7 @@ class ExecutionRegistrationTests(APITestCase):
         self.assertEqual(response.data['status'], 'done')
 
     def test_postpones_subtask_with_note_and_new_date(self):
-        new_date = self.subtask.due_date + timedelta(days=3)
+        new_date = self.subtask.scheduled_date + timedelta(days=3)
         response = self.client.patch(
             self.url,
             {
@@ -63,11 +63,12 @@ class ExecutionRegistrationTests(APITestCase):
         self.subtask.refresh_from_db()
         self.assertEqual(self.subtask.status, 'postponed')
         self.assertEqual(self.subtask.note, 'Esperando confirmación del salón')
-        self.assertEqual(self.subtask.due_date, new_date)
-        self.assertEqual(response.data['due_date'], new_date.isoformat())
+        self.assertEqual(self.subtask.scheduled_date, new_date)
+        self.assertEqual(self.subtask.due_date, self.activity.date_event)
+        self.assertEqual(response.data['scheduled_date'], new_date.isoformat())
 
     def test_postponing_to_an_overloaded_day_is_rejected(self):
-        new_date = self.subtask.due_date + timedelta(days=3)
+        new_date = self.subtask.scheduled_date + timedelta(days=3)
         type(self.subtask).objects.create(
             user=self.user,
             activity=self.activity,
@@ -90,10 +91,10 @@ class ExecutionRegistrationTests(APITestCase):
         self.assertEqual(response.data['conflict']['total_hours'], 7.0)
         self.subtask.refresh_from_db()
         self.assertEqual(self.subtask.status, 'pending')
-        self.assertNotEqual(self.subtask.due_date, new_date)
+        self.assertNotEqual(self.subtask.scheduled_date, new_date)
 
     def test_note_and_new_date_are_optional_when_postponing(self):
-        original_date = self.subtask.due_date
+        original_date = self.subtask.scheduled_date
         response = self.client.patch(
             self.url,
             {'status': 'postponed'},
@@ -103,7 +104,7 @@ class ExecutionRegistrationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.subtask.refresh_from_db()
         self.assertEqual(self.subtask.status, 'postponed')
-        self.assertEqual(self.subtask.due_date, original_date)
+        self.assertEqual(self.subtask.scheduled_date, original_date)
 
     def test_rejects_invalid_status_and_future_beyond_event_date(self):
         invalid_status = self.client.patch(
@@ -115,7 +116,7 @@ class ExecutionRegistrationTests(APITestCase):
             self.url,
             {
                 'status': 'postponed',
-                'due_date': (self.activity.date_event + timedelta(days=1)).isoformat(),
+                'scheduled_date': (self.activity.date_event + timedelta(days=1)).isoformat(),
             },
             format='json',
         )

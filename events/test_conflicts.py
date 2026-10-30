@@ -34,7 +34,8 @@ class ConflictTestBase(APITestCase):
         user = user or self.user
         activity = activity or (self.activity if user == self.user else self.other_activity)
         return Subtask.objects.create(
-            user=user, activity=activity, name=name, due_date=day, scheduled_date=day,
+            user=user, activity=activity, name=name,
+            due_date=activity.date_event, scheduled_date=day,
             estimated_hours=Decimal(str(hours)), status=status_,
         )
 
@@ -79,7 +80,7 @@ class OverloadDetectionTests(ConflictTestBase):
         self.patch(proveedores, {'due_date': self.day_x.isoformat()})
 
         proveedores.refresh_from_db()
-        self.assertEqual(proveedores.due_date, self.day_y)
+        self.assertEqual(proveedores.scheduled_date, self.day_y)
 
     def test_no_conflict_when_total_is_below_limit(self):
         self.make(self.day_x, 4)
@@ -170,7 +171,7 @@ class OverloadDetectionTests(ConflictTestBase):
 
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         proveedores.refresh_from_db()
-        self.assertEqual(proveedores.due_date, self.day_y)
+        self.assertEqual(proveedores.scheduled_date, self.day_y)
 
 
 class OverloadedDayStaysResolvableTests(ConflictTestBase):
@@ -223,7 +224,7 @@ class OverloadedDayStaysResolvableTests(ConflictTestBase):
 
 
 class DailySummaryTests(ConflictTestBase):
-    """El resumen usa due_date, estados planificados y el límite del usuario."""
+    """El resumen usa scheduled_date, estados planificados y el límite del usuario."""
 
     def test_summary_counts_pending_in_progress_and_postponed_tasks_of_the_day(self):
         self.make(self.day_x, 3)
@@ -380,4 +381,4 @@ class LowerLimitWarningTests(ConflictTestBase):
         response = self.client.get(self.url)
         self.assertFalse(response.data['has_conflicts'])
         first.refresh_from_db()
-        self.assertEqual(first.due_date, self.day_x)
+        self.assertEqual(first.scheduled_date, self.day_x)

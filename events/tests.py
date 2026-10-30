@@ -132,8 +132,38 @@ class EventOwnershipTests(APITestCase):
 		)
 
 		self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-		self.assertEqual(response.data['due_date'], payload['due_date'])
+		self.assertEqual(response.data['due_date'], self.own_activity.date_event.isoformat())
+		self.assertEqual(response.data['scheduled_date'], payload['scheduled_date'])
 		self.assertEqual(Subtask.objects.count(), 1)
+
+	def test_subtask_create_derives_event_deadline_and_checks_scheduled_date(self):
+		today = timezone.localdate()
+		event_date = today + timedelta(days=10)
+		scheduled_date = today + timedelta(days=2)
+		self.own_activity.date_event = event_date
+		self.own_activity.save(update_fields=['date_event'])
+		payload = {
+			'activity': self.own_activity.id,
+			'name': 'Gestión programada',
+			'scheduled_date': scheduled_date.isoformat(),
+			'estimated_hours': '6.0',
+		}
+
+		response = self.client.post(reverse('subtask-list'), payload, format='json')
+		conflicting_response = self.client.post(
+			reverse('subtask-list'),
+			{**payload, 'name': 'Otra gestión', 'estimated_hours': '1.0'},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+		self.assertEqual(response.data['due_date'], event_date.isoformat())
+		self.assertEqual(response.data['scheduled_date'], scheduled_date.isoformat())
+		self.assertEqual(conflicting_response.status_code, status.HTTP_400_BAD_REQUEST)
+		self.assertEqual(
+			conflicting_response.data['conflict']['date'],
+			scheduled_date.isoformat(),
+		)
 
 	def test_activity_date_cannot_precede_existing_subtask_dates(self):
 		today = timezone.localdate()
@@ -160,7 +190,7 @@ class EventOwnershipTests(APITestCase):
 		self.own_activity.refresh_from_db()
 		self.assertEqual(self.own_activity.date_event, today + timedelta(days=10))
 
-	def test_activity_date_can_precede_legacy_scheduled_subtask_date(self):
+	def test_activity_date_can_precede_legacy_due_date_when_schedule_fits(self):
 		today = timezone.localdate()
 		self.own_activity.date_event = today + timedelta(days=10)
 		self.own_activity.save(update_fields=['date_event'])
@@ -168,8 +198,8 @@ class EventOwnershipTests(APITestCase):
 			user=self.owner,
 			activity=self.own_activity,
 			name='Gestión programada',
-			due_date=today + timedelta(days=2),
-			scheduled_date=today + timedelta(days=5),
+			due_date=today + timedelta(days=10),
+			scheduled_date=today + timedelta(days=2),
 			estimated_hours=Decimal('1.0'),
 		)
 
@@ -182,6 +212,8 @@ class EventOwnershipTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
 		self.own_activity.refresh_from_db()
 		self.assertEqual(self.own_activity.date_event, today + timedelta(days=4))
+		task = Subtask.objects.get(name='Gestión programada')
+		self.assertEqual(task.due_date, self.own_activity.date_event)
 
 	def test_foreign_subtasks_do_not_leak_in_activity_details(self):
 		Subtask.objects.create(
@@ -268,9 +300,9 @@ class EventOwnershipTests(APITestCase):
 			estimated_hours=Decimal('5.0'),
 		)
 
-		# El resumen calcula la carga por due_date (fecha límite).
+		# La carga se cuenta en la fecha programada de la gestión.
 		response = self.client.get(reverse('daily-capacity-resumen'), {
-			'date': '2026-10-04',
+			'date': '2026-10-03',
 			'user_id': self.other_owner.id,
 		})
 

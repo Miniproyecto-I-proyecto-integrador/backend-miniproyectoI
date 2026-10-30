@@ -1,7 +1,7 @@
 """Lógica de negocio compartida entre serializers y vistas.
 
 Reglas acordadas para la carga diaria (HU-07 / HU-08 / HU-12):
-- La fecha que cuenta es ``due_date`` (fecha límite de la gestión).
+- La fecha que cuenta es ``scheduled_date`` (fecha programada de la gestión).
 - Ocupan tiempo las gestiones ``pending``, ``in_progress`` y ``postponed``.
 - ``done`` ya se ejecutó y se excluye de la carga diaria.
 - Solo se consideran las gestiones del propio organizador.
@@ -68,8 +68,8 @@ def _planned_subtasks(user):
 
 
 def get_day_load(user, day, exclude_id=None):
-    """Horas de trabajo planificado del organizador para un día (due_date)."""
-    queryset = _planned_subtasks(user).filter(due_date=day)
+    """Horas de trabajo planificado del organizador para un día programado."""
+    queryset = _planned_subtasks(user).filter(scheduled_date=day)
     if exclude_id is not None:
         queryset = queryset.exclude(pk=exclude_id)
     return queryset.aggregate(total=Sum('estimated_hours'))['total'] or Decimal('0')
@@ -127,14 +127,14 @@ def find_overloaded_days(user, limit=None, from_date=None):
     from_date = from_date or timezone.localdate()
 
     totals = {
-        row['due_date']: row['total']
+        row['scheduled_date']: row['total']
         for row in (
             _planned_subtasks(user)
-            .filter(due_date__gte=from_date)
-            .values('due_date')
+            .filter(scheduled_date__gte=from_date)
+            .values('scheduled_date')
             .annotate(total=Sum('estimated_hours'))
             .filter(total__gt=limit)
-            .order_by('due_date')
+            .order_by('scheduled_date')
         )
     }
     if not totals:
@@ -143,12 +143,12 @@ def find_overloaded_days(user, limit=None, from_date=None):
     by_day = defaultdict(list)
     subtasks = (
         _planned_subtasks(user)
-        .filter(due_date__in=list(totals))
+        .filter(scheduled_date__in=list(totals))
         .select_related('activity')
-        .order_by('due_date', 'id')
+        .order_by('scheduled_date', 'id')
     )
     for subtask in subtasks:
-        by_day[subtask.due_date].append({
+        by_day[subtask.scheduled_date].append({
             'id': subtask.id,
             'name': subtask.name,
             'activity_id': subtask.activity_id,
@@ -193,7 +193,7 @@ def suggest_available_day(user, subtask, start_date=None, end_date=None):
 
     today = start_date or timezone.localdate()
     event_date = end_date or subtask.activity.date_event
-    original_due_date = subtask.due_date
+    original_scheduled_date = subtask.scheduled_date
 
     if today >= event_date:
         return None
@@ -205,7 +205,7 @@ def suggest_available_day(user, subtask, start_date=None, end_date=None):
     # desde mañana hasta la fecha límite original de la subtarea.
     # ------------------------------------------------------------------
     first_start = today + timedelta(days=1)
-    first_end = min(original_due_date, event_date)
+    first_end = min(original_scheduled_date, event_date)
 
     day = first_start
 
@@ -225,11 +225,11 @@ def suggest_available_day(user, subtask, start_date=None, end_date=None):
 
     # ------------------------------------------------------------------
     # Segunda etapa:
-    # si no hay espacio antes/hasta el due_date original,
-    # continuar después del due_date hasta la fecha del evento.
+    # si no hay espacio antes/hasta la fecha programada original,
+    # continuar después de ella hasta la fecha del evento.
     # ------------------------------------------------------------------
     second_start = max(
-        original_due_date + timedelta(days=1),
+        original_scheduled_date + timedelta(days=1),
         first_start,
     )
 

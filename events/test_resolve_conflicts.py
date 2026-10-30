@@ -41,7 +41,7 @@ class HU08ResolutionTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name='Buscar proveedor',
-            due_date=self.target_day,
+            due_date=self.activity.date_event,
             scheduled_date=self.target_day,
             estimated_hours=Decimal('2.0'),
         )
@@ -51,7 +51,7 @@ class HU08ResolutionTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name='Gestión existente',
-            due_date=self.target_day,
+            due_date=self.activity.date_event,
             scheduled_date=self.target_day,
             estimated_hours=Decimal('5.0'),
         )
@@ -77,7 +77,8 @@ class HU08ResolutionTests(APITestCase):
         self.assertTrue(move_response.data['conflict_resolved'])
         self.subtask.refresh_from_db()
         self.assertEqual(self.subtask.status, 'postponed')
-        self.assertEqual(self.subtask.due_date.isoformat(), suggested_day)
+        self.assertEqual(self.subtask.scheduled_date.isoformat(), suggested_day)
+        self.assertEqual(self.subtask.due_date, self.activity.date_event)
 
     def test_suggests_first_available_day_after_today_before_original_due_date(self):
         response = self.client.get(
@@ -124,7 +125,7 @@ class HU08ResolutionTests(APITestCase):
                 user=self.user,
                 activity=self.activity,
                 name=f'Gestión ocupada {day}',
-                due_date=day,
+                due_date=self.activity.date_event,
                 scheduled_date=day,
                 estimated_hours=Decimal('5.0'),
             )
@@ -180,7 +181,7 @@ class HU08ResolutionTests(APITestCase):
         self.subtask.refresh_from_db()
 
         self.assertEqual(
-            self.subtask.due_date,
+            self.subtask.scheduled_date,
             new_day,
         )
 
@@ -189,7 +190,7 @@ class HU08ResolutionTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name='Otra gestión',
-            due_date=self.target_day,
+            due_date=self.activity.date_event,
             scheduled_date=self.target_day,
             estimated_hours=Decimal('2.0'),
         )
@@ -227,7 +228,7 @@ class HU08ResolutionTests(APITestCase):
         self.subtask.refresh_from_db()
 
         self.assertEqual(
-            self.subtask.due_date,
+            self.subtask.scheduled_date,
             new_day,
         )
 
@@ -236,7 +237,7 @@ class HU08ResolutionTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name='Otra gestión',
-            due_date=self.target_day + timedelta(days=1),
+            due_date=self.activity.date_event,
             scheduled_date=self.target_day + timedelta(days=1),
             estimated_hours=Decimal('5.0'),
         )
@@ -260,10 +261,7 @@ class HU08ResolutionTests(APITestCase):
 
         self.subtask.refresh_from_db()
 
-        self.assertEqual(
-            self.subtask.due_date,
-            self.target_day,
-        )
+        self.assertEqual(self.subtask.scheduled_date, self.target_day)
 
     def test_reduce_hours_resolves_conflict(self):
         response = self.client.patch(
@@ -407,6 +405,6 @@ class HU08ResolutionTests(APITestCase):
         self.subtask.refresh_from_db()
 
         self.assertEqual(
-            self.subtask.due_date,
+            self.subtask.scheduled_date,
             self.today - timedelta(days=1),
         )

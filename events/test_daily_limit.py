@@ -167,7 +167,7 @@ class DailyLimitAffectsConflictDetectionTests(APITestCase):
             estimated_hours=Decimal('5.0'),
         )
 
-        response = self.client.get(reverse('daily-capacity-resumen'), {'date': '2026-10-20'})
+        response = self.client.get(reverse('daily-capacity-resumen'), {'date': '2026-10-10'})
 
         self.assertEqual(response.data['limit_hours'], 4)
         self.assertTrue(response.data['overloaded'])
@@ -194,7 +194,7 @@ class DailyLimitConflictWorkflowTests(APITestCase):
             user=self.user,
             activity=self.activity,
             name=name,
-            due_date=due_date,
+            due_date=self.activity.date_event,
             scheduled_date=due_date,
             estimated_hours=Decimal(hours),
         )
@@ -220,7 +220,7 @@ class DailyLimitConflictWorkflowTests(APITestCase):
             3.0,
         )
         self.assertEqual(get_daily_limit(self.user), 6)
-        self.assertEqual(self.decoration.due_date, self.conflict_day)
+        self.assertEqual(self.decoration.due_date, self.activity.date_event)
 
     def test_apply_reduces_hours_and_saves_limit_together(self):
         response = self.client.post(
@@ -269,7 +269,8 @@ class DailyLimitConflictWorkflowTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         self.decoration.refresh_from_db()
         self.food.refresh_from_db()
-        self.assertEqual(self.decoration.due_date, next_day)
+        self.assertEqual(self.decoration.scheduled_date, next_day)
+        self.assertEqual(self.decoration.due_date, self.activity.date_event)
         self.assertEqual(self.food.estimated_hours, Decimal('2.0'))
         self.assertEqual(get_daily_limit(self.user), 5)
 
@@ -299,5 +300,5 @@ class DailyLimitConflictWorkflowTests(APITestCase):
         third.refresh_from_db()
         fourth.refresh_from_db()
         self.assertEqual(self.food.estimated_hours, Decimal('3.0'))
-        self.assertEqual(third.due_date, other_day)
-        self.assertEqual(fourth.due_date, other_day)
+        self.assertEqual(third.scheduled_date, other_day)
+        self.assertEqual(fourth.scheduled_date, other_day)

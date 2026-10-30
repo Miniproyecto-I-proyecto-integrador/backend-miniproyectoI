@@ -9,6 +9,9 @@ from .services import PLANNED_STATUSES, OverloadConflict, check_day_capacity
 
 
 class SubtaskSerializer(serializers.ModelSerializer):
+    due_date = serializers.DateField(required=False)
+    scheduled_date = serializers.DateField(required=False)
+
     class Meta:
         model = Subtask
         fields = '__all__'
@@ -16,7 +19,13 @@ class SubtaskSerializer(serializers.ModelSerializer):
 
     def validate(self, data):
         activity = data.get('activity', self.instance.activity if self.instance else None)
-        due_date = data.get('due_date', self.instance.due_date if self.instance else None)
+        scheduled_date = data.get(
+            'scheduled_date',
+            data.get(
+                'due_date',
+                self.instance.scheduled_date if self.instance else None,
+            ),
+        )
         estimated_hours = data.get('estimated_hours', self.instance.estimated_hours if self.instance else None)
         status = data.get('status', self.instance.status if self.instance else 'pending')
 
@@ -27,10 +36,14 @@ class SubtaskSerializer(serializers.ModelSerializer):
                     'activity': 'Solo puedes asociar subtareas a tus propios eventos.'
                 })
 
-            # 1. Validación de fechas frente a la fecha del evento
-            if due_date and due_date > activity.date_event:
+            if not scheduled_date:
                 raise serializers.ValidationError({
-                    "due_date": "La fecha límite no puede ser posterior a la fecha del evento."
+                    "scheduled_date": "Este campo es obligatorio."
+                })
+
+            if scheduled_date > activity.date_event:
+                raise serializers.ValidationError({
+                    "scheduled_date": "La fecha programada no puede ser posterior a la fecha del evento."
                 })
 
             # 2. Horas estimadas positivas
@@ -39,12 +52,20 @@ class SubtaskSerializer(serializers.ModelSerializer):
                     "estimated_hours": "Las horas estimadas deben ser mayores a 0."
                 })
 
-            # 3. Sobrecarga diaria (HU-07): límite del organizador, día = due_date
-            self._check_daily_overload(activity.user, due_date, estimated_hours, status)
+            # 3. Sobrecarga diaria (HU-07): se cuenta el día programado.
+            self._check_daily_overload(
+                activity.user,
+                scheduled_date,
+                estimated_hours,
+                status,
+            )
+
+            data['scheduled_date'] = scheduled_date
+            data['due_date'] = activity.date_event
 
         return data
 
-    def _check_daily_overload(self, user, due_date, estimated_hours, status):
+    def _check_daily_overload(self, user, scheduled_date, estimated_hours, status):
         """Bloquea el guardado si el cambio deja el día por encima del límite.
 
         Solo se evalúa cuando el cambio AGREGA carga al día. Editar otros campos,
@@ -52,21 +73,25 @@ class SubtaskSerializer(serializers.ModelSerializer):
         día ya sobrecargado (p. ej. tras bajar el límite) se puede seguir
         resolviendo sin quedar bloqueado.
         """
-        if not due_date or not estimated_hours or status not in PLANNED_STATUSES:
+        if (
+            not scheduled_date
+            or not estimated_hours
+            or status not in PLANNED_STATUSES
+        ):
             return
 
         previous = self.instance
         if (
             previous is not None
             and previous.status in PLANNED_STATUSES
-            and previous.due_date == due_date
+            and previous.scheduled_date == scheduled_date
             and estimated_hours <= previous.estimated_hours
         ):
             return
 
         info = check_day_capacity(
             user,
-            due_date,
+            scheduled_date,
             estimated_hours,
             exclude_id=previous.id if previous else None,
         )
@@ -83,14 +108,14 @@ class ActivitySerializer(serializers.ModelSerializer):
     def validate(self, data):
         if self.instance is not None and 'date_event' in data:
             latest_dates = self.instance.subtasks.aggregate(
-                latest_due_date=Max('due_date'),
+                latest_due_date=Max('scheduled_date'),
             )
             latest_due_date = latest_dates['latest_due_date']
             if latest_due_date and data['date_event'] < latest_due_date:
                 raise serializers.ValidationError({
                     'date_event': (
                         'La fecha del evento no puede ser anterior a la fecha '
-                        'límite de una de sus gestiones.'
+                        'programada de una de sus gestiones.'
                     )
                 })
         return data
@@ -150,6 +175,7 @@ class DailyLimitPreviewSerializer(DailyLimitSerializer):
 class DailyLimitChangeSerializer(serializers.Serializer):
     subtask_id = serializers.IntegerField(min_value=1)
     action = serializers.ChoiceField(choices=('move', 'reduce_hours'))
+    scheduled_date = serializers.DateField(required=False)
     due_date = serializers.DateField(required=False)
     estimated_hours = serializers.DecimalField(
         max_digits=4,
@@ -159,14 +185,18 @@ class DailyLimitChangeSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
+        if 'due_date' in attrs and 'scheduled_date' not in attrs:
+            attrs['scheduled_date'] = attrs.pop('due_date')
+        else:
+            attrs.pop('due_date', None)
         if attrs['action'] == 'move':
-            if 'due_date' not in attrs or 'estimated_hours' in attrs:
+            if 'scheduled_date' not in attrs or 'estimated_hours' in attrs:
                 raise serializers.ValidationError(
-                    'Mover requiere due_date y no admite estimated_hours.'
+                    'Mover requiere scheduled_date y no admite estimated_hours.'
                 )
-        elif 'estimated_hours' not in attrs or 'due_date' in attrs:
+        elif 'estimated_hours' not in attrs or 'scheduled_date' in attrs:
             raise serializers.ValidationError(
-                'Reducir horas requiere estimated_hours y no admite due_date.'
+                'Reducir horas requiere estimated_hours y no admite scheduled_date.'
             )
         elif attrs['estimated_hours'] % Decimal('0.5') != 0:
             raise serializers.ValidationError(
@@ -196,7 +226,18 @@ class DailyCapacitySerializer(serializers.ModelSerializer):
 
 class ResolutionMoveSerializer(serializers.Serializer):
     """HU-08: valida la nueva fecha para mover una gestión."""
-    due_date = serializers.DateField(required=True)
+    scheduled_date = serializers.DateField(required=False)
+    due_date = serializers.DateField(required=False)
+
+    def validate(self, attrs):
+        scheduled_date = attrs.get('scheduled_date', attrs.get('due_date'))
+        if scheduled_date is None:
+            raise serializers.ValidationError({
+                'scheduled_date': 'Este campo es obligatorio.'
+            })
+        attrs['scheduled_date'] = scheduled_date
+        attrs.pop('due_date', None)
+        return attrs
 
 
 class ResolutionReduceHoursSerializer(serializers.Serializer):
@@ -216,11 +257,18 @@ class ExecutionRegistrationSerializer(serializers.Serializer):
     """US-09: valida el estado final y los datos de una tarea ejecutada o pospuesta."""
     status = serializers.ChoiceField(choices=('done', 'postponed'))
     note = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    scheduled_date = serializers.DateField(required=False)
     due_date = serializers.DateField(required=False)
 
     def validate(self, attrs):
-        if attrs.get('status') == 'done' and 'due_date' in attrs:
+        if attrs.get('status') == 'done' and (
+            'due_date' in attrs or 'scheduled_date' in attrs
+        ):
             raise serializers.ValidationError({
-                'due_date': 'Solo se puede indicar una nueva fecha al posponer la tarea.'
+                'scheduled_date': 'Solo se puede indicar una nueva fecha al posponer la tarea.'
             })
+        if 'due_date' in attrs and 'scheduled_date' not in attrs:
+            attrs['scheduled_date'] = attrs.pop('due_date')
+        else:
+            attrs.pop('due_date', None)
         return attrs
